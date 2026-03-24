@@ -15,6 +15,7 @@ Routes:
 import json
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ from server.ollama_client import OllamaClient
 from server.claude_client import ClaudeClient
 from server.router import Router
 from server.observe import observer
+from server.cache import cache
 
 # Globals initialized at startup
 config: LumenConfig = None
@@ -78,10 +80,15 @@ async def lifespan(app: FastAPI):
     else:
         print("  Claude API key not set — local-only mode")
 
+    # Start background data cache
+    cache.start()
+    print("  Data cache started (finance/sports/news)")
+
     print(f"  Lumen ready on http://{config.server.host}:{config.server.port}")
     yield
 
     # Shutdown
+    await cache.stop()
     await ollama.close()
     await claude.close()
     print("  Lumen shut down")
@@ -405,14 +412,10 @@ async def predictions():
     recent_mood = await get_recent_mood(hours=4)
     mins_since = await get_minutes_since_last_chat()
 
-    # Check if a Philly team plays today
-    game_today = False
-    try:
-        from agents.sports.scores import get_philly_snapshot
-        snap = await get_philly_snapshot()
-        game_today = snap.game_today_exists
-    except Exception:
-        pass
+    # Check if a Philly team plays today (from cache — instant)
+    game_today = cache._game_live or (
+        cache.sports.data is not None and cache.sports.data.game_today_exists
+    )
 
     preds = lumen_core.predict_intent(
         hour=now.hour,
@@ -556,17 +559,29 @@ async def observe_dashboard():
     return HTMLResponse("<h1>Observability dashboard not found</h1>")
 
 
+# --- Cache Status ---
+
+
+@app.get("/api/cache/status")
+async def cache_status():
+    """Get the current state of all data caches.
+    Used by the UI to show refresh indicators."""
+    return cache.get_status()
+
+
 # --- Domain Agent Routes ---
 
 
 @app.get("/api/finance/snapshot")
 async def finance_snapshot():
-    """Get current market data snapshot."""
-    from agents.finance.collector import collect_all, snapshot_to_text
-    snapshot = await collect_all()
+    """Get current market data snapshot (from cache)."""
+    snapshot = cache.finance.data
+    if snapshot is None:
+        from agents.finance.collector import collect_all
+        snapshot = await collect_all()
     return {
         "timestamp": snapshot.timestamp,
-        "text": snapshot_to_text(snapshot),
+        "text": cache.finance.text or "",
         "crypto_count": len(snapshot.crypto),
         "fear_greed": {
             "value": snapshot.fear_greed.value,
@@ -574,6 +589,7 @@ async def finance_snapshot():
             "trend": snapshot.fear_greed.trend,
         } if snapshot.fear_greed else None,
         "source_stock": snapshot.source_stock,
+        "cache_age_s": int(time.monotonic() - cache.finance.last_updated) if cache.finance.last_updated else -1,
     }
 
 
@@ -621,11 +637,13 @@ async def remove_watchlist(symbol: str):
 
 @app.get("/api/sports/scores")
 async def sports_scores():
-    """Get live scores and records for Philly teams."""
-    from agents.sports.scores import get_philly_snapshot, snapshot_to_text
-    snapshot = await get_philly_snapshot()
+    """Get live scores and records for Philly teams (from cache)."""
+    snapshot = cache.sports.data
+    if snapshot is None:
+        from agents.sports.scores import get_philly_snapshot
+        snapshot = await get_philly_snapshot()
     return {
-        "text": snapshot_to_text(snapshot),
+        "text": cache.sports.text or "",
         "games_today": [
             {"home": g.home_team, "away": g.away_team,
              "home_score": g.home_score, "away_score": g.away_score,
@@ -638,6 +656,8 @@ async def sports_scores():
             for k, v in snapshot.records.items()
         },
         "game_today": snapshot.game_today_exists,
+        "game_live": cache._game_live,
+        "cache_age_s": int(time.monotonic() - cache.sports.last_updated) if cache.sports.last_updated else -1,
     }
 
 
@@ -667,16 +687,19 @@ async def sports_recap(team: str):
 
 @app.get("/api/news/feed")
 async def news_feed():
-    """Get aggregated news from all sources."""
-    from agents.news.aggregator import get_all_news, news_to_text
-    items = await get_all_news(hn_count=20)
+    """Get aggregated news from all sources (from cache)."""
+    items = cache.news.data
+    if items is None:
+        from agents.news.aggregator import get_all_news
+        items = await get_all_news(hn_count=20)
     return {
-        "text": news_to_text(items),
+        "text": cache.news.text or "",
         "items": [
             {"title": i.title, "url": i.url, "source": i.source,
              "score": i.score, "comments": i.comments}
             for i in items[:20]
         ],
+        "cache_age_s": int(time.monotonic() - cache.news.last_updated) if cache.news.last_updated else -1,
     }
 
 

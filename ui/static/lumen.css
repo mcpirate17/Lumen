@@ -285,6 +285,60 @@ html, body {
   opacity: 0.3;
 }
 
+/* ── Data Feed Status ── */
+#feed-status {
+  margin-top: 16px;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: center;
+}
+.feed-block {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.feed-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: rgba(200, 216, 232, 0.2);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.feed-block.ready .feed-dot {
+  background: #00ff88;
+  box-shadow: 0 0 6px rgba(0, 255, 136, 0.5);
+}
+.feed-block.refreshing .feed-dot {
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan-glow);
+  animation: feed-pulse 0.8s ease-in-out infinite;
+}
+.feed-block.error .feed-dot {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(255, 68, 68, 0.5);
+}
+.feed-block.stale .feed-dot {
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--gold-dim);
+}
+@keyframes feed-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.7); }
+}
+.feed-label {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  color: var(--text-dim);
+  transition: color 0.3s;
+}
+.feed-block.refreshing .feed-label {
+  color: var(--cyan);
+}
+.feed-block.ready .feed-label {
+  color: rgba(200, 216, 232, 0.6);
+}
+
 /* ── Transcript overlay ── */
 #transcript {
   position: fixed;

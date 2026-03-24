@@ -532,6 +532,64 @@ setInterval(checkHealth, 30000);
 setTimeout(checkHealth, 800);
 
 // ══════════════════════════════════════════════════════════════════════════════
+// DATA FEED STATUS — polls /api/cache/status to show refresh indicators
+// ══════════════════════════════════════════════════════════════════════════════
+const FEED_STALE_THRESHOLD = {
+  finance: 700,   // 11+ min = stale (refresh is 10m)
+  sports: 1000,   // 16+ min = stale (refresh is 15m, or 2m during games)
+  news: 1000,     // 16+ min = stale
+};
+
+function updateFeedStatus(data) {
+  for (const [name, info] of Object.entries(data)) {
+    if (name === 'game_live') continue;
+    const el = document.getElementById(`feed-${name}`);
+    if (!el) continue;
+
+    el.className = 'feed-block';
+    if (info.state === 'refreshing') {
+      el.classList.add('refreshing');
+    } else if (info.state === 'error') {
+      el.classList.add('error');
+    } else if (!info.has_data) {
+      // No data yet (startup)
+    } else if (info.age_seconds > (FEED_STALE_THRESHOLD[name] || 900)) {
+      el.classList.add('stale');
+    } else {
+      el.classList.add('ready');
+    }
+  }
+
+  // If a game is live, highlight the sports indicator
+  if (data.game_live) {
+    const sptLabel = document.querySelector('#feed-sports .feed-label');
+    if (sptLabel) sptLabel.textContent = 'SPT LIVE';
+  } else {
+    const sptLabel = document.querySelector('#feed-sports .feed-label');
+    if (sptLabel) sptLabel.textContent = 'SPT';
+  }
+}
+
+async function pollCacheStatus() {
+  try {
+    const resp = await fetch(`${CFG.serverUrl}/api/cache/status`, { signal: AbortSignal.timeout(3000) });
+    if (resp.ok) {
+      const data = await resp.json();
+      updateFeedStatus(data);
+    }
+  } catch(e) {
+    // Server down — grey out all feeds
+    for (const name of ['finance', 'sports', 'news']) {
+      const el = document.getElementById(`feed-${name}`);
+      if (el) el.className = 'feed-block';
+    }
+  }
+}
+
+setInterval(pollCacheStatus, 5000);
+setTimeout(pollCacheStatus, 2000);
+
+// ══════════════════════════════════════════════════════════════════════════════
 // VOICE OUTPUT (TTS) — Kokoro on :5050 with Web Speech fallback
 // ══════════════════════════════════════════════════════════════════════════════
 let ttsVoice = null;

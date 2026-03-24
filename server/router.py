@@ -400,28 +400,48 @@ class Router:
         return result
 
     async def _fetch_domain_data(self, domain: str) -> str:
-        """Fetch live data for a domain to inject into the LLM prompt.
-        Returns empty string if no data or timeout."""
+        """Get cached domain data to inject into the LLM prompt.
+        Reads from the background cache (instant) instead of fetching per-request.
+        Returns empty string if cache has no data yet."""
+        from server.cache import cache
+
+        try:
+            if domain == "finance" and cache.finance.text:
+                log.info("[DOMAIN] Using cached finance data (age: %ds)",
+                         int(time.monotonic() - cache.finance.last_updated))
+                return cache.finance.text
+
+            elif domain == "sports" and cache.sports.text:
+                log.info("[DOMAIN] Using cached sports data (age: %ds)",
+                         int(time.monotonic() - cache.sports.last_updated))
+                return cache.sports.text
+
+            elif domain == "news" and cache.news.text:
+                log.info("[DOMAIN] Using cached news data (age: %ds)",
+                         int(time.monotonic() - cache.news.last_updated))
+                return cache.news.text
+
+        except Exception as e:
+            log.warning("[DOMAIN] Cache read failed for %s: %s", domain, e)
+
+        # Cache miss — data not loaded yet (first few seconds after startup)
+        # Fall back to a quick fetch
+        log.info("[DOMAIN] Cache miss for %s — fetching directly", domain)
         try:
             if domain == "finance":
                 from agents.finance.collector import collect_all, snapshot_to_text
                 snapshot = await asyncio.wait_for(collect_all(), timeout=10.0)
                 return snapshot_to_text(snapshot)
-
             elif domain == "sports":
                 from agents.sports.scores import get_philly_snapshot, snapshot_to_text
                 snapshot = await asyncio.wait_for(get_philly_snapshot(), timeout=8.0)
                 return snapshot_to_text(snapshot)
-
             elif domain == "news":
                 from agents.news.aggregator import get_all_news, news_to_text
                 items = await asyncio.wait_for(get_all_news(hn_count=10), timeout=8.0)
                 return news_to_text(items, max_items=10)
-
-        except asyncio.TimeoutError:
-            log.warning("[DOMAIN] %s data fetch timed out", domain)
         except Exception as e:
-            log.warning("[DOMAIN] %s data fetch failed: %s", domain, e)
+            log.warning("[DOMAIN] Fallback fetch failed for %s: %s", domain, e)
 
         return ""
 
