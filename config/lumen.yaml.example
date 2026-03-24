@@ -1,0 +1,92 @@
+# Lumen Configuration — Example
+# Copy to lumen.yaml and customize for your setup:
+#   cp config/lumen.yaml.example config/lumen.yaml
+
+server:
+  host: 127.0.0.1
+  port: 3000
+
+models:
+  ollama:
+    base_url: http://127.0.0.1:11434
+    models:
+      fast: qwen3.5:2b        # quick facts, acks
+      general: qwen3.5:4b     # most tasks
+      analysis: qwen3.5:9b    # finance, news, deep analysis
+      guard: qwen3guard:0.6b  # output safety filter
+  claude:
+    # Only used when Qwen can't handle it
+    # API key set via environment variable ANTHROPIC_API_KEY
+    model: claude-sonnet-4-6
+    max_monthly_budget: 2.00   # hard cap in dollars
+    usage_log: data/claude_usage.json
+
+tts:
+  engine: kokoro
+  voice: bm_george
+  port: 5050
+  streaming: true
+
+profile:
+  enabled: false                     # opt-in for published version
+  sentiment_model: vader
+  deep_analysis_interval: daily
+  condense_interval: weekly
+  max_profile_size_kb: 50
+
+guardrails:
+  enabled: true
+  engine: qwen3guard
+  fallback: rule_based
+  block_categories:
+    - harmful_content
+    - financial_advice_without_disclaimer
+    - hallucinated_data
+  quality_checks:
+    min_words: 4
+    min_chars: 20
+    must_end_punctuation: true
+    coherence_check: true
+
+routing:
+  escalation_keywords:
+    - think
+    - analyze
+    - plan
+    - strategy
+    - advise
+    - compare
+    - "what do you think"
+    - "your opinion"
+  escalation_rules:
+    max_words_for_local: 40
+    max_questions_for_local: 1
+    frustration_keywords:
+      - wrong
+      - stupid
+      - idiot
+      - "pass to claude"
+      - "use claude"
+  always_local:
+    - time
+    - date
+    - weather
+    - sports scores
+    - stock price
+    - crypto price
+
+user:
+  name: User                         # your name
+  timezone: America/New_York         # your timezone
+  teams: []                          # sports teams to follow
+  watchlist:
+    stocks: []                       # e.g. [AAPL, NVDA, MSFT]
+    crypto: []                       # e.g. [bitcoin, ethereum]
+    bonds: []                        # e.g. [10Y Treasury]
+
+cron:
+  finance_brief: "*/30 * * * *"
+  sports_check: "*/15 * * * *"
+  news_digest: "0 8,12,18 * * *"
+  profile_condense: "0 3 * * 0"
+  health_check: "*/1 * * * *"

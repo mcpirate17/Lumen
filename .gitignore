@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Rust
+target/
+crates/lumen-core/target/
+
+# Data (user-specific)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+
+# Config (user-specific)
+config/lumen.yaml
+config/user.yaml
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Audio cache
+ui/static/cache/

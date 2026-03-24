@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LUMEN — Personal AI Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="static/lumen.css">
+</head>
+<body>
+
+<!-- Background canvas for particles -->
+<canvas id="bg-canvas"></canvas>
+
+<!-- Scanlines -->
+<div id="scanlines"></div>
+
+<!-- Decorative arcs -->
+<div class="arc-deco arc-1"></div>
+<div class="arc-deco arc-2"></div>
+<div class="arc-deco arc-3"></div>
+
+<!-- Corner brackets -->
+<div class="corner corner-tl"></div>
+<div class="corner corner-tr"></div>
+<div class="corner corner-bl"></div>
+<div class="corner corner-br"></div>
+
+<!-- Horizontal rules -->
+<div class="h-rule top"></div>
+<div class="h-rule bottom"></div>
+
+<!-- Side decorative bars -->
+<div class="side-panel left" id="side-left"></div>
+<div class="side-panel right" id="side-right"></div>
+
+<!-- Header -->
+<div id="header">
+  <div>
+    <div class="header-title">LUMEN — Personal Assistant</div>
+    <div class="header-sub">LOCAL UNIFIED MIND ENGINE &middot; v1.0</div>
+  </div>
+  <div class="header-right">
+    <div id="clock">--:--:--</div>
+    <div id="date-display">---.---.----</div>
+  </div>
+</div>
+
+<!-- Gear button -->
+<div id="gear-btn" title="Settings">&#9881;</div>
+
+<!-- Toast notification -->
+<div id="toast"></div>
+
+<!-- Main content -->
+<div id="main">
+  <div id="status-text">LUMEN ONLINE</div>
+
+  <div id="orb-wrap">
+    <!-- Spinning rings -->
+    <div class="ring ring-4"></div>
+    <div class="ring ring-3"></div>
+    <div class="ring ring-2"></div>
+    <div class="ring ring-1"></div>
+    <!-- Core orb canvas -->
+    <canvas id="orb-canvas" width="320" height="320"></canvas>
+    <!-- Mic icon (SVG) -->
+    <div id="mic-icon">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V23h-3v2h8v-2h-3v-2.06A9 9 0 0 0 21 12v-2h-2z"/>
+      </svg>
+    </div>
+  </div>
+
+  <div id="sub-status">
+    <div class="stat-block">
+      <div class="stat-label">Server</div>
+      <div class="stat-value bad" id="conn-stat">CHECKING</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-block">
+      <div class="stat-label">Voice</div>
+      <div class="stat-value" id="voice-stat">INIT</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-block">
+      <div class="stat-label">Session</div>
+      <div class="stat-value ok" id="session-stat">ACTIVE</div>
+    </div>
+  </div>
+</div>
+
+<!-- Transcript overlay -->
+<div id="transcript"></div>
+
+<!-- Text input fallback -->
+<div id="text-input-wrap">
+  <input type="text" id="text-input" placeholder="Type a message..." autocomplete="off" />
+  <button id="text-send-btn">SEND</button>
+</div>
+
+<!-- Chat log -->
+<div id="chat-log"></div>
+
+<!-- Model indicator -->
+<div id="model-indicator">LUMEN</div>
+
+<!-- Settings overlay -->
+<div id="settings-overlay">
+  <div id="settings-panel">
+    <div class="settings-title">System Configuration</div>
+
+    <div class="settings-field">
+      <label class="settings-label" for="s-url">Server URL</label>
+      <input class="settings-input" type="text" id="s-url" value="http://127.0.0.1:3000" />
+    </div>
+
+    <div class="settings-field">
+      <label class="settings-label" for="s-tts-port">TTS Port (Kokoro)</label>
+      <input class="settings-input" type="text" id="s-tts-port" value="5050" />
+    </div>
+
+    <div class="settings-field">
+      <label class="settings-label" for="s-voice">Fallback TTS Voice (Web Speech)</label>
+      <input class="settings-input" type="text" id="s-voice" value="Google UK English Male" />
+    </div>
+
+    <div class="settings-actions">
+      <button class="btn-primary" id="s-save">SAVE</button>
+      <button class="btn-cancel" id="s-cancel">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<script src="static/lumen.js"></script>
+</body>
+</html>
