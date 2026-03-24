@@ -50,7 +50,7 @@ static SPORTS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static NEWS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(news|headline|latest|what happened|whats new|breaking|announce|launch|release|update on|openai|anthropic|google|apple|microsoft|ai news|tech news)\b").unwrap()
+    Regex::new(r"(?i)\b(news|headline|latest|what happened|whats new|whats happening|breaking|announce|launch|release|update on|stories|top stories|trending|openai|anthropic|google|apple|microsoft|ai news|tech news|tech stories|hacker news)\b").unwrap()
 });
 
 static TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
