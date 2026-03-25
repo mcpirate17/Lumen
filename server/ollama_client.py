@@ -40,11 +40,13 @@ class OllamaClient:
         prompt: str,
         model: str,
         system: str = "",
-        temperature: float = 0.4,
+        temperature: float = 0.7,
+        top_p: float = 0.8,
         max_tokens: int = 512,
+        think: bool = False,
         history: list[dict] | None = None,
     ) -> str:
-        """Generate a completion from Ollama using /api/chat with think=false."""
+        """Generate a completion from Ollama using /api/chat."""
         trace = OllamaTrace(
             model=model, prompt=prompt, system=system,
             temperature=temperature, max_tokens=max_tokens,
@@ -58,16 +60,24 @@ class OllamaClient:
             messages.extend(history)
         messages.append({"role": "user", "content": prompt})
 
+        # Keep 0.8B and 4B permanently in memory (pre-warmed)
+        # 0.8B for instant acks, 4B for most domain queries
+        keep_alive = "5m"
+        if "0.8b" in model or "4b" in model:
+            keep_alive = -1  # permanent
+
         payload = {
             "model": model,
             "messages": messages,
             "stream": False,
-            "think": False,
+            "think": think,
             "options": {
                 "temperature": temperature,
+                "top_p": top_p,
+                "top_k": 20,
                 "num_predict": max_tokens,
             },
-            "keep_alive": -1 if "0.8b" in model else "5m",
+            "keep_alive": keep_alive,
         }
 
         try:
@@ -101,8 +111,10 @@ class OllamaClient:
         prompt: str,
         model: str,
         system: str = "",
-        temperature: float = 0.4,
+        temperature: float = 0.7,
+        top_p: float = 0.8,
         max_tokens: int = 512,
+        think: bool = False,
         history: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """Stream tokens from Ollama using /api/chat."""
@@ -113,16 +125,22 @@ class OllamaClient:
             messages.extend(history)
         messages.append({"role": "user", "content": prompt})
 
+        keep_alive = "5m"
+        if "0.8b" in model or "4b" in model:
+            keep_alive = -1
+
         payload = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "think": False,
+            "think": think,
             "options": {
                 "temperature": temperature,
+                "top_p": top_p,
+                "top_k": 20,
                 "num_predict": max_tokens,
             },
-            "keep_alive": -1 if "0.8b" in model else "5m",
+            "keep_alive": keep_alive,
         }
 
         async with self._client.stream("POST", "/api/chat", json=payload) as resp:

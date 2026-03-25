@@ -7,7 +7,7 @@
 const CFG = {
   serverUrl:  'http://127.0.0.1:3000',
   ttsPort:    5050,
-  voice:      'Google UK English Male',
+  voice:      'Google UK English Female',
   ttsRate:    0.9,
   ttsPitch:   0.85,
   autoListen: false,
@@ -600,12 +600,25 @@ let lastSpokenText = '';
 let lastSpokenTime = 0;
 let ttsStartTime = 0;
 
-// Truncate long text for voice output (used for non-streamed responses only).
-// Streaming responses handle this via sentence-by-sentence delivery.
+// Compress text for voice output: max 35 words, 3 sentences.
+// Research: users disengage after 8-10 seconds / 35 words of spoken output.
+// Full text stays in chat log — this only affects what gets spoken.
+const MAX_VOICE_WORDS = 35;
+
 function truncateForVoice(text) {
   const sentences = text.match(/[^.!?]+[.!?]*/g)
     ?.map(s => s.trim()).filter(s => s.length > 2) || [text];
-  return sentences.slice(0, 5).join(' ');
+
+  let result = [];
+  let wordCount = 0;
+  for (const s of sentences) {
+    const words = s.trim().split(/\s+/).length;
+    if (wordCount + words > MAX_VOICE_WORDS && result.length > 0) break;
+    result.push(s);
+    wordCount += words;
+    if (result.length >= 3) break; // hard cap at 3 sentences
+  }
+  return result.join(' ');
 }
 
 // Inter-sentence pause duration based on ending punctuation

@@ -57,12 +57,16 @@ SYSTEM_PROMPTS = {
     ),
 }
 
-# Model config: (temperature, max_tokens, timeout_seconds)
+# Model config: (temperature, top_p, max_tokens, timeout_seconds, think)
+# Qwen3.5 official recommendations:
+#   Non-thinking: temp=0.7, top_p=0.8, top_k=20
+#   Thinking (precise): temp=0.6, top_p=0.95, top_k=20
+#   Never use greedy decoding (temp=0) with thinking mode — causes loops
 MODEL_PARAMS = {
-    "qwen:2b":  (0.3, 200, 10),
-    "qwen:4b":  (0.4, 400, 30),
-    "qwen:9b":  (0.3, 600, 45),
-    "claude":   (0.7, 1024, 120),
+    "qwen:2b":  (0.7, 0.8,  200,  10, False),  # fast tier, non-thinking always
+    "qwen:4b":  (0.6, 0.95, 400,  30, True),   # thinking mode for domain queries
+    "qwen:9b":  (0.6, 0.95, 600,  45, True),   # thinking mode for complex
+    "claude":   (0.7, 1.0,  1024, 120, False),
 }
 
 
@@ -158,6 +162,9 @@ class Router:
         # Step 5b: Fetch domain-specific live data (non-blocking, with timeout)
         domain_context = await self._fetch_domain_data(classification.domain)
         if domain_context:
+            # Filter to only what's relevant to the query (saves tokens for small models)
+            from server.context import filter_context
+            domain_context = filter_context(classification.domain, user_message, domain_context)
             log.info("[DOMAIN] injected %d chars of %s data", len(domain_context), classification.domain)
 
         log.info("[MODEL] selected %s (Ollama model: %s) with %d history msgs", classification.route, model_name, len(history))
@@ -364,10 +371,10 @@ class Router:
         history: list[dict] | None = None,
     ) -> str:
         """Generate via Ollama with tier-appropriate params."""
-        temp, max_tok, _ = MODEL_PARAMS.get(tier, (0.4, 400, 30))
+        temp, top_p, max_tok, _, think = MODEL_PARAMS.get(tier, (0.7, 0.8, 400, 30, False))
         log.info(
-            "[GENERATE] local model=%s tier=%s temp=%.1f max_tokens=%d history=%d",
-            model, tier, temp, max_tok, len(history) if history else 0,
+            "[GENERATE] local model=%s tier=%s temp=%.1f top_p=%.2f max_tokens=%d think=%s history=%d",
+            model, tier, temp, top_p, max_tok, think, len(history) if history else 0,
         )
 
         result = await self.ollama.generate(
@@ -375,7 +382,9 @@ class Router:
             model=model,
             system=system,
             temperature=temp,
+            top_p=top_p,
             max_tokens=max_tok,
+            think=think,
             history=history,
         )
 

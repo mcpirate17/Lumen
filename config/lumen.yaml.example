@@ -23,7 +23,7 @@ models:
 
 tts:
   engine: kokoro
-  voice: bm_george
+  voice: af_bella           # options: af_bella, af_sarah, af_nicole, bm_george
   port: 5050
   streaming: true
 

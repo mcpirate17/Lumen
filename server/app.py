@@ -204,7 +204,7 @@ async def chat_stream(request: Request):
         model_name = model_map.get(classification.route, config.ollama.model_analysis)
         tier = classification.route
         system = SYSTEM_PROMPTS.get(classification.domain, SYSTEM_PROMPTS["general"])
-        temp, max_tok, _ = MODEL_PARAMS.get(tier, (0.4, 400, 30))
+        temp, top_p, max_tok, _, think = MODEL_PARAMS.get(tier, (0.7, 0.8, 400, 30, False))
         trace.model_selected = f"{tier} → {model_name}"
         trace.system_prompt = system
 
@@ -213,10 +213,12 @@ async def chat_stream(request: Request):
         is_trivial = classification.reason == "greeting_or_trivial"
         history = [] if is_trivial else await db.get_recent_chat_history(limit=8)
 
-        # Step 4b: Fetch domain data for context injection
+        # Step 4b: Fetch domain data for context injection (filtered to query)
         domain_context = await router._fetch_domain_data(classification.domain)
         augmented_message = message
         if domain_context:
+            from server.context import filter_context
+            domain_context = filter_context(classification.domain, message, domain_context)
             augmented_message = (
                 f"[LIVE DATA — use this to answer the question]\n{domain_context}\n\n"
                 f"[USER QUESTION]\n{message}"
@@ -288,8 +290,8 @@ async def chat_stream(request: Request):
 
             async for token in ollama.stream_generate(
                 prompt=augmented_message, model=model_name,
-                system=system, temperature=temp, max_tokens=max_tok,
-                history=history,
+                system=system, temperature=temp, top_p=top_p,
+                max_tokens=max_tok, think=think, history=history,
             ):
                 full_response += token
                 sentence_buffer += token
