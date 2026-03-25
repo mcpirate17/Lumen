@@ -54,6 +54,11 @@ class DataCache:
         self.sports_live_interval = 120  # 2 minutes during live games
         self.news_interval = 900       # 15 minutes
 
+        # Scanner intervals
+        self.quick_scan_interval = 1800    # 30 minutes
+        self.watchlist_scan_interval = 900  # 15 minutes
+        self.full_scan_interval = 14400     # 4 hours
+
     def start(self):
         """Start background refresh tasks. Call during app startup."""
         if self._running:
@@ -63,8 +68,11 @@ class DataCache:
             asyncio.create_task(self._refresh_loop("finance", self._refresh_finance)),
             asyncio.create_task(self._refresh_loop("sports", self._refresh_sports)),
             asyncio.create_task(self._refresh_loop("news", self._refresh_news)),
+            asyncio.create_task(self._scan_loop("quick_scan", self._run_quick_scan, self.quick_scan_interval)),
+            asyncio.create_task(self._scan_loop("watchlist_scan", self._run_watchlist_scan, self.watchlist_scan_interval)),
+            asyncio.create_task(self._scan_loop("full_scan", self._run_full_scan, self.full_scan_interval)),
         ]
-        log.info("[CACHE] Background refresh started")
+        log.info("[CACHE] Background refresh + scanners started")
 
     async def stop(self):
         """Stop all background refresh tasks."""
@@ -178,6 +186,58 @@ class DataCache:
             self.news.state = CacheState.ERROR
             self.news.error = str(e)
             log.warning("[CACHE] News refresh failed: %s", e)
+
+    # -- Scanners --
+
+    async def _run_quick_scan(self):
+        """Run a quick market scan (sector ETFs + watchlist + top crypto)."""
+        from agents.finance.scanner import quick_scan
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(quick_scan(), timeout=120.0)
+            ms = int((time.monotonic() - t0) * 1000)
+            log.info("[SCANNER] Quick scan done (%dms, %d findings)",
+                     ms, result.get("new_findings", 0))
+        except Exception as e:
+            log.warning("[SCANNER] Quick scan failed: %s", e)
+
+    async def _run_watchlist_scan(self):
+        """Scan just the watchlist."""
+        from agents.finance.scanner import watchlist_scan
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(watchlist_scan(), timeout=60.0)
+            ms = int((time.monotonic() - t0) * 1000)
+            log.info("[SCANNER] Watchlist scan done (%dms, %d findings)",
+                     ms, result.get("new_findings", 0))
+        except Exception as e:
+            log.warning("[SCANNER] Watchlist scan failed: %s", e)
+
+    async def _run_full_scan(self):
+        """Full market scan with deep analysis."""
+        from agents.finance.scanner import full_scan
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(full_scan(), timeout=600.0)
+            ms = int((time.monotonic() - t0) * 1000)
+            log.info("[SCANNER] Full scan done (%dms, %d findings)",
+                     ms, result.get("new_findings", 0))
+        except Exception as e:
+            log.warning("[SCANNER] Full scan failed: %s", e)
+
+    async def _scan_loop(self, name: str, scan_fn, interval: int):
+        """Run a scanner on a fixed interval. Delays first run to let caches warm up."""
+        # Wait 60s after startup before first scan (let data caches fill first)
+        await asyncio.sleep(60)
+        while self._running:
+            try:
+                await scan_fn()
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error("[SCANNER] %s loop error: %s", name, e)
+                await asyncio.sleep(60)
 
     # -- Refresh loop --
 

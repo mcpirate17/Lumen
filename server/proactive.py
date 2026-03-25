@@ -101,6 +101,11 @@ async def evaluate_after_response(domain: str, user_message: str) -> Suggestion 
         if market_suggestion:
             suggestions.append(market_suggestion)
 
+    # Check scanner findings (analytics-based alerts)
+    scanner_suggestion = await _check_scanner_findings()
+    if scanner_suggestion:
+        suggestions.append(scanner_suggestion)
+
     # Check for interest callbacks (things user asked about before)
     callback = await _check_interest_callbacks(user_message)
     if callback:
@@ -236,6 +241,33 @@ async def _check_market_alerts() -> Suggestion | None:
         )
 
     return None
+
+
+async def _check_scanner_findings() -> Suggestion | None:
+    """Check for notable scanner findings to surface proactively.
+
+    The scanner runs in the background. This pulls the top unseen finding
+    and turns it into a suggestion. Example:
+    "Heads up — NVDA is oversold on 3 indicators."
+    """
+    try:
+        from agents.finance.scanner import get_proactive_findings
+        findings = await get_proactive_findings(max_items=1)
+        if not findings:
+            return None
+
+        f = findings[0]
+        return Suggestion(
+            text=f.get("headline", "Notable market finding"),
+            reason=f"Scanner: {f.get('category', 'unknown')} signal for {f.get('symbol', '?')}",
+            category="scanner_alert",
+            urgency=4 if f.get("category") in ("oversold", "overbought", "insider_activity") else 2,
+            relevance=3,
+            action=f"Want details on {f.get('symbol', 'this')}?",
+        )
+    except Exception as e:
+        log.warning("[PROACTIVE] Scanner findings check failed: %s", e)
+        return None
 
 
 async def _check_interest_callbacks(user_message: str) -> Suggestion | None:

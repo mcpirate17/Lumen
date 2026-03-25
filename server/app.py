@@ -776,6 +776,61 @@ async def finance_analyze_crypto(coin_id: str):
     return {"coin": coin_id.lower(), "report": report}
 
 
+@app.get("/api/finance/dashboard")
+async def finance_dashboard():
+    """Get scanner findings grouped by category for the finance dashboard."""
+    from agents.finance.scanner import get_dashboard_data
+    return await get_dashboard_data()
+
+
+@app.get("/api/finance/scan/quick")
+async def finance_scan_quick():
+    """Trigger a quick market scan (sector ETFs + watchlist + top crypto)."""
+    from agents.finance.scanner import quick_scan
+    result = await quick_scan()
+    return result
+
+
+@app.get("/api/finance/scan/full")
+async def finance_scan_full():
+    """Trigger a full market scan with deep analysis."""
+    from agents.finance.scanner import full_scan
+    result = await full_scan()
+    return result
+
+
+@app.post("/api/finance/findings/{finding_id}/dismiss")
+async def finance_dismiss_finding(finding_id: int):
+    """Dismiss a scanner finding."""
+    from agents.finance.scanner import dismiss_finding
+    await dismiss_finding(finding_id)
+    return {"dismissed": finding_id}
+
+
+@app.post("/api/finance/findings/seen")
+async def finance_mark_seen(request: Request):
+    """Mark findings as seen."""
+    from agents.finance.scanner import mark_seen
+    body = await request.json()
+    ids = body.get("ids", [])
+    await mark_seen(ids)
+    return {"marked_seen": len(ids)}
+
+
+@app.post("/api/finance/universe")
+async def finance_add_to_universe(request: Request):
+    """Add a symbol to the scan universe."""
+    from agents.finance.scanner import add_to_universe
+    body = await request.json()
+    symbol = body.get("symbol", "").upper()
+    asset_type = body.get("type", "stock")
+    category = body.get("category", "custom")
+    if not symbol:
+        return JSONResponse({"error": "symbol required"}, status_code=400)
+    await add_to_universe(symbol, asset_type, category)
+    return {"added": symbol}
+
+
 @app.get("/api/finance/watchlist")
 async def get_watchlist():
     """Get watchlist with current prices."""
