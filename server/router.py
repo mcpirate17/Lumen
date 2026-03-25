@@ -156,8 +156,19 @@ class Router:
         model_name = self._resolve_model(classification.route)
         trace.model_selected = f"{classification.route} → {model_name}"
 
-        # Fetch recent conversation history for context
-        history = await db.get_recent_chat_history(limit=8)
+        # Fetch conversation context (summary + recent messages)
+        from server.memory import get_context_messages, get_core_memory
+        is_trivial = classification.reason == "greeting_or_trivial"
+        if is_trivial:
+            history = []
+        else:
+            history = await get_context_messages(
+                ollama_client=self.ollama,
+                model=self.config.ollama.model_fast,
+            )
+
+        # Inject core memory (persistent user facts) into system prompt
+        core_mem = await get_core_memory()
 
         # Step 5b: Fetch domain-specific live data (non-blocking, with timeout)
         domain_context = await self._fetch_domain_data(classification.domain)
@@ -191,6 +202,8 @@ class Router:
 
         # Step 7: Generate response
         system = SYSTEM_PROMPTS.get(classification.domain, SYSTEM_PROMPTS["general"])
+        if core_mem:
+            system = f"{system}\n\n{core_mem}"
         trace.system_prompt = system
         response = ""
         actual_model = classification.route

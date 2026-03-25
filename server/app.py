@@ -208,10 +208,21 @@ async def chat_stream(request: Request):
         trace.model_selected = f"{tier} → {model_name}"
         trace.system_prompt = system
 
-        # Step 4: Fetch conversation history for context
-        # Skip history for greetings — prevents context bleed from old topics
+        # Step 4: Fetch conversation context (summary + recent messages)
+        from server.memory import get_context_messages, get_core_memory
         is_trivial = classification.reason == "greeting_or_trivial"
-        history = [] if is_trivial else await db.get_recent_chat_history(limit=8)
+        if is_trivial:
+            history = []
+        else:
+            history = await get_context_messages(
+                ollama_client=ollama,
+                model=config.ollama.model_fast,
+            )
+
+        # Inject core memory into system prompt
+        core_mem = await get_core_memory()
+        if core_mem:
+            system = f"{system}\n\n{core_mem}"
 
         # Step 4b: Fetch domain data for context injection (filtered to query)
         domain_context = await router._fetch_domain_data(classification.domain)
