@@ -45,8 +45,15 @@ class OllamaClient:
         max_tokens: int = 512,
         think: bool = False,
         history: list[dict] | None = None,
+        json_format: bool = False,
     ) -> str:
-        """Generate a completion from Ollama using /api/chat."""
+        """Generate a completion from Ollama using /api/chat.
+
+        Args:
+            json_format: If True, constrain output to valid JSON.
+                Research: constrained decoding lets small models match larger
+                ones on schema-constrained tasks.
+        """
         trace = OllamaTrace(
             model=model, prompt=prompt, system=system,
             temperature=temperature, max_tokens=max_tokens,
@@ -79,6 +86,8 @@ class OllamaClient:
             },
             "keep_alive": keep_alive,
         }
+        if json_format:
+            payload["format"] = "json"
 
         try:
             resp = await self._client.post("/api/chat", json=payload)
@@ -196,6 +205,35 @@ class OllamaClient:
             max_tokens=5,
         )
         return "yes" in result.lower()
+
+    async def structured_classify(self, text: str, categories: list[str],
+                                    model: str) -> dict:
+        """Classify text into one of the given categories using JSON output.
+
+        Uses constrained decoding to ensure valid JSON. Useful for
+        intent parsing, tool selection, entity extraction.
+
+        Returns: {"category": str, "confidence": str}
+        """
+        cats_str = ", ".join(f'"{c}"' for c in categories)
+        prompt = (
+            f'Classify this text into exactly one category.\n'
+            f'Text: "{text}"\n'
+            f'Categories: [{cats_str}]\n'
+            f'Respond with JSON: {{"category": "...", "confidence": "high/medium/low"}}'
+        )
+        try:
+            import json
+            result = await self.generate(
+                prompt=prompt,
+                model=model,
+                temperature=0.0,
+                max_tokens=50,
+                json_format=True,
+            )
+            return json.loads(result)
+        except Exception:
+            return {"category": categories[0] if categories else "unknown", "confidence": "low"}
 
     async def self_consistency_check(self, prompt: str, model: str,
                                        system: str = "", n: int = 3) -> tuple[str, bool]:

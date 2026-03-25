@@ -242,10 +242,78 @@ async def _check_interest_callbacks(user_message: str) -> Suggestion | None:
     """Check if there's something to follow up on from recent conversations.
 
     This is the "didn't you say you wanted to check that out?" pattern.
-    Looks at recent profile data for stated interests or pending items.
+    Pulls recent topics from DB and matches against current cached data
+    to find natural follow-up opportunities.
     """
-    # TODO: Implement when profile engine has interest tracking
-    # For now, this is a placeholder for the pattern
+    from server.database import get_recent_topics, get_db
+
+    try:
+        # Get topics from the last 24 hours
+        recent_topics = await get_recent_topics(hours=24)
+
+        # If user was talking about finance recently but isn't now, and market moved
+        if recent_topics.get("finance", 0) >= 3:
+            from server.cache import cache
+            if cache.finance.data and cache.finance.data.fear_greed:
+                fg = cache.finance.data.fear_greed
+                if fg.value <= 15 and fg.trend == "DETERIORATING":
+                    return Suggestion(
+                        text=f"You've been following markets — Fear & Greed dropped to {fg.value}. That's historically low.",
+                        reason="User has been asking about finance + extreme fear reading",
+                        category="interest_callback",
+                        urgency=3,
+                        relevance=4,
+                        action="Want a deeper look at what's moving?",
+                    )
+
+        # If user asked about sports recently, and a game result came in
+        if recent_topics.get("sports", 0) >= 2:
+            from server.cache import cache
+            if cache.sports.data:
+                for game in cache.sports.data.games_today:
+                    if game.is_philly_game and game.status == "post":
+                        winner = game.home_team if game.home_score > game.away_score else game.away_team
+                        return Suggestion(
+                            text=f"Final: {game.away_team} {game.away_score} - {game.home_team} {game.home_score}.",
+                            reason=f"User was following {game.philly_team} + game just ended",
+                            category="interest_callback",
+                            urgency=3,
+                            relevance=5,
+                            action="Want the recap?",
+                        )
+
+        # Check for stated interests in profile
+        db = await get_db()
+        try:
+            async with db.execute(
+                """SELECT key, value FROM profile
+                   WHERE category = 'interests' AND confidence >= 0.6
+                   ORDER BY last_updated DESC LIMIT 5"""
+            ) as cur:
+                interests = await cur.fetchall()
+        finally:
+            await db.close()
+
+        # Match interests against current news
+        if interests:
+            from server.cache import cache
+            if cache.news.data:
+                for interest in interests:
+                    topic = interest["key"].lower()
+                    for item in cache.news.data[:10]:
+                        if topic in item.title.lower():
+                            return Suggestion(
+                                text=f"Saw something about {interest['key']}: {item.title[:60]}",
+                                reason=f"Matches user interest: {interest['key']}",
+                                category="interest_callback",
+                                urgency=2,
+                                relevance=4,
+                                action="Want a summary?",
+                            )
+
+    except Exception as e:
+        log.warning("[PROACTIVE] Interest callback check failed: %s", e)
+
     return None
 
 
