@@ -77,7 +77,17 @@
   - Fixed thinking mode: contextual, not per-tier. Simple extraction stays non-thinking.
   - Proactive intelligence (`server/proactive.py`): game alerts, market moves, morning briefs. Max 1/10min.
   - Updated personality for friend mode. New endpoints: `/api/proactive/status`, `/api/proactive/respond`
-- **2026-03-24 20:50** — Integrating Session B's `server/emotions.py` into router for mood-adaptive prompts
+- **2026-03-24 20:50** — Integrated Session B's `server/emotions.py`: mood hints in system prompt, warmup at startup
+- **2026-03-24 21:00** — Self-repair, guardrail override, semantic endpointing
+- **2026-03-24 21:20** — Plan C work:
+  - Skip 2B: config now routes general → 4B (0.8B→4B jump per research)
+  - Self-consistency voting: `self_consistency_check()` generates N responses, returns majority
+  - JSON constrained decoding: `json_format=True` + `structured_classify()` helper
+  - Compact key-value context format for better small-model parsing
+  - Interest callbacks in proactive system (matches topics against cached data)
+  - Integrated Session B's finance analytics: `/api/finance/analyze/{symbol}`, `/api/finance/analyze/crypto/{coin_id}`
+  - Classifier regex updated for analytics keywords (analyze, rsi, macd, etc.)
+- **SESSION A DONE** — All Plan A + Plan C items implemented. Remaining: MLX evaluation (needs benchmarking), LoRA fine-tuning (needs training data collection)
 
 ### Session B Notes
 - **2026-03-24 20:30** — Completed Plan B Phases 1-3 (Behavioral Engine):
@@ -93,4 +103,18 @@
   - Updated `docs/PLAN-BEHAVIORAL-ENGINE.md` Phase 4 — "Friend Mode" replaces the old "Never Do These" rules
   - Updated mood prompt hints in `server/emotions.py` to be friendlier (acknowledge mood naturally, not invisibly)
   - **TODO FOR SESSION A — Guardrail passcode override**: Tim wants a passcode that disables app-layer guardrails (output quality gates, enthusiasm limits, formality enforcement). Qwen3Guard stays active always. Suggested approach: add `guardrail_override_passcode` field to `server/config.py` → check in router before running app-layer guards. Config value lives in `lumen.yaml` (gitignored). Also update `personality.md` to reflect friend mode — natural emotional acknowledgment, interest callbacks, light check-ins are all encouraged.
+- **2026-03-24 21:15** — Finance analytics engine:
+  - `agents/finance/analytics.py` — NEW: full technical + fundamental analysis
+    - **Technical**: RSI (14), MACD (12/26/9), Bollinger Bands %B, Stochastic (14/3), ADX trend strength, SMA 50/200, golden/death cross detection
+    - **Fundamental**: P/E, PEG (with manual fallback), P/B, EV/EBITDA, D/E, ROE, beta, 52-week position
+    - **Crypto**: fetches CoinGecko daily history, applies same technical indicators
+    - **Scoring**: each symbol gets risk_score (0-1) and opportunity_score (0-1) from signal aggregation
+    - Key functions: `analyze_stock(symbol)`, `analyze_crypto(coin_id)`, `analyze_watchlist(items)`, `analyze_top_movers(symbols)`, `analysis_to_text(results)`, `signals_summary(results)`
+  - Updated `agents/finance/storyboard.py`:
+    - `generate_storyboard()` now accepts optional `watchlist` param, runs analytics on watchlist + top movers + top crypto concurrently
+    - LLM prompt now includes TECHNICAL SIGNALS and VALUATIONS sections
+    - New `generate_analytics_report(symbols)` for standalone analysis ("analyze NVDA")
+    - Max tokens bumped 600→800 to accommodate analytics sections
+  - **Deps**: appended `ta>=0.11`, `yfinance>=0.2.40`, `pandas>=2.0` to requirements.txt
+  - **NOTE FOR SESSION A**: `generate_storyboard()` signature changed — now takes optional `watchlist: list[dict]` param. Also new `generate_analytics_report(symbols, asset_type)` available for direct "analyze X" queries from router.
 
