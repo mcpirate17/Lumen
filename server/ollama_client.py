@@ -197,6 +197,50 @@ class OllamaClient:
         )
         return "yes" in result.lower()
 
+    async def self_consistency_check(self, prompt: str, model: str,
+                                       system: str = "", n: int = 3) -> tuple[str, bool]:
+        """Generate N responses and return the majority answer + consistency flag.
+
+        Research: self-consistency voting catches hallucinations in small models.
+        At 500 tok/s, 3 short responses from 0.8B takes <1s total.
+
+        Returns: (majority_answer, is_consistent)
+        """
+        import asyncio
+        tasks = [
+            self.generate(prompt=prompt, model=model, system=system,
+                          temperature=0.7, max_tokens=150)
+            for _ in range(n)
+        ]
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Filter out errors
+        valid = [r.strip() for r in responses if isinstance(r, str) and r.strip()]
+        if not valid:
+            return ("", False)
+        if len(valid) == 1:
+            return (valid[0], True)
+
+        # Check consistency: if all responses start with the same key fact (first sentence)
+        first_sentences = []
+        for r in valid:
+            sent = r.split('.')[0].strip() if '.' in r else r[:100].strip()
+            first_sentences.append(sent.lower())
+
+        # Simple majority: most common first sentence
+        from collections import Counter
+        counts = Counter(first_sentences)
+        most_common, count = counts.most_common(1)[0]
+        is_consistent = count >= (n // 2 + 1)  # majority agrees
+
+        # Return the full response that matches the majority
+        for r in valid:
+            first = r.split('.')[0].strip().lower() if '.' in r else r[:100].strip().lower()
+            if first == most_common:
+                return (r, is_consistent)
+
+        return (valid[0], is_consistent)
+
     async def self_check(self, question: str, answer: str, model: str) -> bool:
         """Ask the model if it's confident in its own answer. Returns True if confident."""
         prompt = (

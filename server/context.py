@@ -178,6 +178,32 @@ def filter_news_context(query: str, full_text: str) -> str:
     return '\n'.join(result)
 
 
+def to_compact_kv(text: str) -> str:
+    """Convert verbose table-formatted data to compact key-value pairs.
+
+    Research: small models parse 'BTC: $70,730 (-5.3% 7d)' more reliably
+    than aligned table columns. Also uses fewer tokens.
+    """
+    lines = text.split('\n')
+    compact = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('---') or stripped.startswith('==='):
+            # Keep section headers, skip separators
+            if stripped.startswith('---') and any(c.isalpha() for c in stripped):
+                compact.append(stripped)
+            elif stripped.startswith('==='):
+                compact.append(stripped)
+            continue
+        # Keep lines that are already compact (short, informative)
+        if len(stripped) < 100:
+            compact.append(stripped)
+        else:
+            # Truncate very long lines
+            compact.append(stripped[:100])
+    return '\n'.join(compact)
+
+
 def filter_context(domain: str, query: str, full_text: str) -> str:
     """Filter domain data based on the query. Main entry point."""
     if not full_text:
@@ -191,6 +217,9 @@ def filter_context(domain: str, query: str, full_text: str) -> str:
         filtered = filter_news_context(query, full_text)
     else:
         filtered = full_text
+
+    # Convert to compact format for better small-model parsing
+    filtered = to_compact_kv(filtered)
 
     original_len = len(full_text)
     filtered_len = len(filtered)

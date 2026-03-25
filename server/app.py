@@ -752,10 +752,28 @@ async def finance_snapshot():
 
 @app.get("/api/finance/brief")
 async def finance_brief():
-    """Generate a market brief narrative."""
-    from agents.finance.storyboard import generate_quick_brief
-    brief = await generate_quick_brief(ollama, config.ollama.model_analysis)
+    """Generate a market brief narrative with analytics."""
+    from agents.finance.storyboard import generate_storyboard
+    from agents.finance.watchlist import get_watchlist as get_wl
+    watchlist = await get_wl()
+    brief = await generate_storyboard(ollama, config.ollama.model_analysis, watchlist=watchlist)
     return {"brief": brief}
+
+
+@app.get("/api/finance/analyze/{symbol}")
+async def finance_analyze(symbol: str):
+    """Run technical + fundamental analysis on a symbol."""
+    from agents.finance.storyboard import generate_analytics_report
+    report = await generate_analytics_report([symbol.upper()], asset_type="stock")
+    return {"symbol": symbol.upper(), "report": report}
+
+
+@app.get("/api/finance/analyze/crypto/{coin_id}")
+async def finance_analyze_crypto(coin_id: str):
+    """Run technical analysis on a crypto coin."""
+    from agents.finance.storyboard import generate_analytics_report
+    report = await generate_analytics_report([coin_id.lower()], asset_type="crypto")
+    return {"coin": coin_id.lower(), "report": report}
 
 
 @app.get("/api/finance/watchlist")

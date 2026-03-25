@@ -42,7 +42,7 @@ static ESCALATION_RE: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
 });
 
 static FINANCE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(stock|stocks|share|shares|market|nasdaq|s&p|dow|crypto|bitcoin|btc|eth|ethereum|bond|bonds|yield|treasury|price of|ticker|portfolio|trading|bull|bear|ipo|earnings|dividend|forex)\b").unwrap()
+    Regex::new(r"(?i)\b(stock|stocks|share|shares|market|nasdaq|s&p|dow|crypto|bitcoin|btc|eth|ethereum|bond|bonds|yield|treasury|price of|ticker|portfolio|trading|bull|bear|ipo|earnings|dividend|forex|watchlist|analyze|rsi|macd|overbought|oversold|overvalued|undervalued|p/e|valuation)\b").unwrap()
 });
 
 static SPORTS_RE: LazyLock<Regex> = LazyLock::new(|| {
