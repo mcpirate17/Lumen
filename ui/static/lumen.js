@@ -404,10 +404,16 @@ async function handleTranscript(transcript) {
           ttsQueue.push(sentence);
           if (!ttsBusy) processTTSQueue();
 
+        } else if (data.type === 'suggestion') {
+          // Proactive suggestion from Lumen
+          console.log(`[Stream] suggestion: "${data.text}" (${data.category})`);
+          showSuggestion(data.text, data.action, data.reason);
+
         } else if (data.type === 'done') {
           model = data.model;
           if (data.full_text) fullText = data.full_text;
-          console.log(`[Stream] done: model=${model} latency=${data.latency_ms}ms guard=${data.guardrail_safe} trace=#${data.trace_id}`);
+          const spec = data.speculative ? ' [speculative]' : '';
+          console.log(`[Stream] done: model=${model} latency=${data.latency_ms}ms guard=${data.guardrail_safe} trace=#${data.trace_id}${spec}`);
         }
       }
     }
@@ -834,6 +840,33 @@ function shouldAutoListen() {
 // Stub functions kept for compatibility with speech recognition event handlers.
 function startBackchannelTimer() {}
 function clearBackchannelTimer() {}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PROACTIVE SUGGESTIONS
+// Shows a subtle notification when Lumen has a proactive suggestion.
+// User can accept (click/say yes) or dismiss (click X / ignore).
+// ══════════════════════════════════════════════════════════════════════════════
+let suggestionTimer = null;
+
+function showSuggestion(text, action, reason) {
+  // Don't show if speaking or processing
+  if (speaking || ttsBusy || currentState === 'processing') return;
+
+  const el = document.getElementById('toast');
+  const display = action ? `${text} ${action}` : text;
+  el.textContent = display;
+  el.className = 'suggestion visible';
+  clearTimeout(suggestionTimer);
+
+  // Auto-dismiss after 15 seconds
+  suggestionTimer = setTimeout(() => {
+    el.classList.remove('visible');
+  }, 15000);
+
+  // Add to chat log as a suggestion
+  addMessage('assistant', `\u2728 ${text}${action ? ' ' + action : ''}`, 'suggestion');
+  console.log(`[Proactive] Showing: "${display}" (reason: ${reason})`);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // VOICE INPUT (Speech Recognition)

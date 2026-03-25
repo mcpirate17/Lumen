@@ -72,6 +72,25 @@
   - Voice output capped at 35 words / 3 sentences (research-backed)
   - Switched to female voice (af_bella) + rewrote personality.md with stronger persona + example dialogues
   - **Integration point for Session B**: I will import `server/emotions.py:analyze_emotion()` from the router once Session B creates it
+- **2026-03-24 20:35** — Second batch:
+  - Speculative execution: 0.8B tries every query first with domain data. If draft passes relevancy → skip bigger model.
+  - Fixed thinking mode: contextual, not per-tier. Simple extraction stays non-thinking.
+  - Proactive intelligence (`server/proactive.py`): game alerts, market moves, morning briefs. Max 1/10min.
+  - Updated personality for friend mode. New endpoints: `/api/proactive/status`, `/api/proactive/respond`
+- **2026-03-24 20:50** — Integrating Session B's `server/emotions.py` into router for mood-adaptive prompts
 
 ### Session B Notes
+- **2026-03-24 20:30** — Completed Plan B Phases 1-3 (Behavioral Engine):
+  - `server/emotions.py` — unified emotion API: `analyze_emotion(text) -> dict` (TinyBERT + NRCLex + VADER)
+  - `profile/engine.py` — added `extract_style_metrics()` + rolling baselines + drift detection
+  - `profile/sentiment.py` — upgraded to 3-layer analysis, emotion trend tracking
+  - `data/migrations/002_emotions.sql` — emotion columns on mood, new behavioral_metrics + baselines tables
+  - `server/database.py` — 5 new query functions for emotions and behavioral metrics
+  - `server/config.py` — added `EmotionConfig` dataclass
+  - `requirements.txt` — appended transformers, NRCLex, torch
+  - **Session A**: `server/emotions.py` is ready. Import `analyze_emotion` and `get_mood_prompt_hint`. Call `warmup()` from app lifespan if desired.
+- **2026-03-24 20:45** — Personality direction update per Tim:
+  - Updated `docs/PLAN-BEHAVIORAL-ENGINE.md` Phase 4 — "Friend Mode" replaces the old "Never Do These" rules
+  - Updated mood prompt hints in `server/emotions.py` to be friendlier (acknowledge mood naturally, not invisibly)
+  - **TODO FOR SESSION A — Guardrail passcode override**: Tim wants a passcode that disables app-layer guardrails (output quality gates, enthusiasm limits, formality enforcement). Qwen3Guard stays active always. Suggested approach: add `guardrail_override_passcode` field to `server/config.py` → check in router before running app-layer guards. Config value lives in `lumen.yaml` (gitignored). Also update `personality.md` to reflect friend mode — natural emotional acknowledgment, interest callbacks, light check-ins are all encouraged.
 

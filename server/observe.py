@@ -71,6 +71,9 @@ class RequestTrace:
     was_escalated: bool = False
     escalation_reason: str = ""
 
+    # Speculative execution
+    speculative_accepted: bool = False
+
     # Relevancy
     relevancy_checked: bool = False
     relevancy_passed: bool = True

@@ -80,6 +80,14 @@ async def lifespan(app: FastAPI):
     else:
         print("  Claude API key not set — local-only mode")
 
+    # Warm up emotion models (TinyBERT + NRCLex)
+    try:
+        from server.emotions import warmup as warmup_emotions
+        await warmup_emotions()
+        print("  Emotion models ready")
+    except Exception as e:
+        print(f"  Emotion models unavailable: {e}")
+
     # Start background data cache
     cache.start()
     print("  Data cache started (finance/sports/news)")
@@ -240,43 +248,60 @@ async def chat_stream(request: Request):
                 f"[USER QUESTION]\n{message}"
             )
 
-        # Step 5: Two-tier response strategy
-        # The 0.8B is always in memory — use it for instant responses.
-        # If the query needs a bigger model, 0.8B gives a quick ack while bigger model thinks.
-        needs_upgrade = tier != "qwen:2b"  # qwen:2b = fast tier = 0.8B handles it alone
+        # Step 5: Speculative execution strategy
+        # For ALL queries: try 0.8B first (it's always in memory, ~500ms).
+        # If the query has injected domain data, 0.8B can often extract the answer.
+        # If 0.8B's answer passes relevancy check, use it — skip the bigger model entirely.
+        # If not, fall back to 4B/9B streaming.
+        needs_upgrade = tier != "qwen:2b"
+        draft_accepted = False
 
         try:
+            # Always try 0.8B first as a speculative draft
+            import re as _re
+            draft = await ollama.instant_response(
+                augmented_message, config.ollama.model_fast,
+                system=system, history=history,
+            )
+            draft = draft.strip()
+            trace.ack_text = draft
+            trace.ack_model = config.ollama.model_fast
+            trace.ack_duration_ms = (ollama.last_trace.total_duration_ms
+                                     if ollama.last_trace else 0)
+
             if not needs_upgrade:
-                # 0.8B is the final answer — get a full response
-                instant = await ollama.instant_response(
-                    augmented_message, config.ollama.model_fast,
-                    system=system, history=history,
-                )
-                instant = instant.strip()
-                trace.ack_text = instant
-                trace.ack_model = config.ollama.model_fast
-                trace.ack_duration_ms = (ollama.last_trace.total_duration_ms
-                                         if ollama.last_trace else 0)
-                # Send as sentences
-                import re
-                sents = re.split(r'(?<=[.!?])\s+', instant)
+                # 0.8B was the intended model — send the draft as final
+                draft_accepted = True
+                sents = _re.split(r'(?<=[.!?])\s+', draft)
                 for i, s in enumerate(sents):
                     if s.strip() and len(s.strip()) > 2:
                         yield f"data: {json.dumps({'type': 'sentence', 'text': s.strip(), 'index': i+1})}\n\n"
-            else:
-                # 0.8B gives a short ack while bigger model works
-                ack = await ollama.acknowledge(message, config.ollama.model_fast)
-                ack = ack.strip().strip('"').strip()
-                trace.ack_text = ack
-                trace.ack_model = config.ollama.model_fast
-                trace.ack_duration_ms = (ollama.last_trace.total_duration_ms
-                                         if ollama.last_trace else 0)
-                yield f"data: {json.dumps({'type': 'ack', 'text': ack})}\n\n"
+
+            elif domain_context and draft and len(draft) > 20:
+                # Domain query with injected data — check if 0.8B draft is good enough
+                try:
+                    relevant = await ollama.check_relevancy(
+                        message, draft, config.ollama.model_fast
+                    )
+                    if relevant:
+                        # Draft is relevant — use it, skip the bigger model!
+                        draft_accepted = True
+                        trace.speculative_accepted = True
+                        sents = _re.split(r'(?<=[.!?])\s+', draft)
+                        for i, s in enumerate(sents):
+                            if s.strip() and len(s.strip()) > 2:
+                                yield f"data: {json.dumps({'type': 'sentence', 'text': s.strip(), 'index': i+1})}\n\n"
+                except Exception:
+                    pass  # relevancy check failed — fall through to bigger model
+
+            if not draft_accepted and needs_upgrade:
+                # Draft wasn't good enough — send it as a quick ack while bigger model works
+                yield f"data: {json.dumps({'type': 'ack', 'text': draft})}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'ack', 'text': 'Working on that now.'})}\n\n"
 
-        # Step 6: If upgrade needed, stream from the bigger model
+        # Step 6: If upgrade needed (and draft wasn't accepted), stream from the bigger model
         use_claude = classification.escalate and await claude.is_available()
         full_response = ""
         actual_model = tier
@@ -284,12 +309,13 @@ async def chat_stream(request: Request):
         sentences_sent = 0
         MAX_VOICE_SENTENCES = 3  # Research: users disengage after 3 spoken sentences
 
-        if not needs_upgrade:
-            # 0.8B was the final answer
+        if draft_accepted:
+            # Speculative draft was good enough — use it as the final response
             full_response = trace.ack_text or ""
             actual_model = "qwen:2b"
+            actual_model = "qwen:2b"
 
-        elif use_claude:
+        elif use_claude and not draft_accepted:
             try:
                 full_response = await claude.generate(
                     prompt=augmented_message, system=system, reason=classification.reason,
@@ -298,7 +324,7 @@ async def chat_stream(request: Request):
             except Exception:
                 use_claude = False
 
-        if needs_upgrade and not use_claude:
+        if needs_upgrade and not use_claude and not draft_accepted:
             # Stream from the bigger Ollama model
             actual_model = tier
             gen_start = _time.monotonic()
@@ -383,8 +409,18 @@ async def chat_stream(request: Request):
 
         observer.save(trace)
 
+        # Step 8: Check for proactive suggestions (non-blocking)
+        from server.proactive import evaluate_after_response, record_user_activity
+        record_user_activity()
+        try:
+            suggestion = await evaluate_after_response(classification.domain, message)
+            if suggestion:
+                yield f"data: {json.dumps({'type': 'suggestion', 'text': suggestion.text, 'reason': suggestion.reason, 'action': suggestion.action, 'category': suggestion.category})}\n\n"
+        except Exception:
+            pass
+
         # Final event with metadata
-        yield f"data: {json.dumps({'type': 'done', 'model': actual_model, 'domain': classification.domain, 'latency_ms': latency, 'guardrail_safe': guardrail.safe, 'trace_id': trace.id, 'full_text': full_response, 'relevant': trace.relevancy_passed})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'model': actual_model, 'domain': classification.domain, 'latency_ms': latency, 'guardrail_safe': guardrail.safe, 'trace_id': trace.id, 'full_text': full_response, 'relevant': trace.relevancy_passed, 'speculative': getattr(trace, 'speculative_accepted', False)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -585,6 +621,26 @@ async def cache_status():
     """Get the current state of all data caches.
     Used by the UI to show refresh indicators."""
     return cache.get_status()
+
+
+# --- Proactive Intelligence ---
+
+
+@app.get("/api/proactive/status")
+async def proactive_status():
+    """Get proactive suggestion system status."""
+    from server.proactive import get_proactive_status
+    return get_proactive_status()
+
+
+@app.post("/api/proactive/respond")
+async def proactive_respond(request: Request):
+    """Record user response to a proactive suggestion."""
+    from server.proactive import record_suggestion_response
+    body = await request.json()
+    accepted = body.get("accepted", False)
+    record_suggestion_response(accepted)
+    return {"recorded": True, "accepted": accepted}
 
 
 # --- Domain Agent Routes ---

@@ -107,8 +107,18 @@ class Router:
         start = time.monotonic()
         trace = observer.new_trace(user_message)
 
-        # Step 1: Sentiment analysis (Rust, <1ms)
+        # Step 1: Emotion analysis (VADER + TinyBERT + NRCLex via server/emotions.py)
         t0 = time.monotonic()
+        try:
+            from server.emotions import analyze_emotion, get_mood_prompt_hint
+            emotion_result = await analyze_emotion(user_message)
+            mood_hint = get_mood_prompt_hint(emotion_result)
+        except Exception as e:
+            log.warning("[EMOTION] Analysis failed: %s — using VADER only", e)
+            emotion_result = None
+            mood_hint = ""
+
+        # VADER is always available via Rust
         sentiment = lumen_core.analyze_sentiment(user_message)
         sentiment_ms = (time.monotonic() - t0) * 1000
 
@@ -118,12 +128,18 @@ class Router:
         trace.sentiment_neg = sentiment.negative
         trace.sentiment_neu = sentiment.neutral
 
-        log.info(
-            "[SENTIMENT] compound=%.3f mood=%s pos=%.2f neg=%.2f neu=%.2f (%.1fms)",
-            sentiment.compound, sentiment.mood,
-            sentiment.positive, sentiment.negative, sentiment.neutral,
-            sentiment_ms,
-        )
+        if emotion_result:
+            log.info(
+                "[EMOTION] %s (%.2f) | vader=%.3f %s | mood_adj=%s (%.1fms)",
+                emotion_result["emotion"], emotion_result["confidence"],
+                sentiment.compound, sentiment.mood,
+                emotion_result["mood_adjustment"], sentiment_ms,
+            )
+        else:
+            log.info(
+                "[SENTIMENT] compound=%.3f mood=%s (%.1fms)",
+                sentiment.compound, sentiment.mood, sentiment_ms,
+            )
 
         # Step 2: Classify (Rust, <1ms)
         t0 = time.monotonic()
@@ -214,6 +230,8 @@ class Router:
         system = SYSTEM_PROMPTS.get(classification.domain, SYSTEM_PROMPTS["general"])
         if core_mem:
             system = f"{system}\n\n{core_mem}"
+        if mood_hint:
+            system = f"{system}\n\n[Mood context: {mood_hint}]"
         trace.system_prompt = system
         response = ""
         actual_model = classification.route
