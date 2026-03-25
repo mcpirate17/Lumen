@@ -104,6 +104,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Lumen", version="0.1.0", lifespan=lifespan)
 
+# CORS — allow browser requests from same origin and local network
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Serve static files
 if UI_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(UI_DIR / "static")), name="static")

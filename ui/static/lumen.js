@@ -483,7 +483,6 @@ async function handleTranscript(transcript) {
     }
     // UNLOCK on error path too
     setTimeout(() => { conversationLock = false; }, SPEECH_COOLDOWN_MS);
-    }
   }
 }
 
@@ -497,7 +496,10 @@ function sendChat(text) {
 // ══════════════════════════════════════════════════════════════════════════════
 async function checkHealth() {
   try {
-    const resp = await fetch(`${CFG.serverUrl}/api/health`, { signal: AbortSignal.timeout(3000) });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const resp = await fetch(`${CFG.serverUrl}/api/health`, { signal: controller.signal });
+    clearTimeout(timeoutId);
     if (resp.ok) {
       const data = await resp.json();
       serverOnline = true;
