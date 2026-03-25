@@ -10,10 +10,13 @@ and get a full dump, or say "forget X" to delete any entry.
 
 import re
 import json
+import logging
 from datetime import datetime, timezone
 from collections import Counter
 from server import database as db
 from server.ollama_client import OllamaClient
+
+logger = logging.getLogger("lumen.engine")
 
 
 # Topic detection patterns
@@ -56,6 +59,24 @@ FORMALITY_MARKERS = {
 LIKE_PATTERN = re.compile(r"(?i)\b(i (?:really )?(?:like|love|enjoy|prefer|want)|that'?s (?:great|perfect|exactly))\b")
 DISLIKE_PATTERN = re.compile(r"(?i)\b(i (?:don'?t |really don'?t )?(?:like|want|need|care about)|(?:stop|quit|enough|no more))\b")
 
+# --- Behavioral feature extraction patterns (Phase 2) ---
+_SENTENCE_SPLIT = re.compile(r'[.!?]+')
+_PRONOUN_I = re.compile(r"(?i)\b(i|me|my|mine|myself)\b")
+_PRONOUN_WE = re.compile(r"(?i)\b(we|us|our|ours|ourselves)\b")
+_PRONOUN_YOU = re.compile(r"(?i)\b(you|your|yours|yourself)\b")
+_EMOJI_PATTERN = re.compile(
+    r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+    r"\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF"
+    r"\U00002702-\U000027B0\U0000FE00-\U0000FE0F\U0000200D]"
+)
+# Function words that signal formality (articles, prepositions, conjunctions)
+_FUNCTION_WORDS = frozenset({
+    "the", "a", "an", "in", "on", "at", "to", "for", "of", "with",
+    "by", "from", "as", "into", "through", "during", "before", "after",
+    "above", "below", "between", "under", "although", "however",
+    "therefore", "furthermore", "moreover", "nevertheless", "whereas",
+})
+
 
 class ProfileEngine:
     """Extracts and maintains a behavioral profile from conversations."""
@@ -68,10 +89,12 @@ class ProfileEngine:
         self._hour_distribution = Counter()
 
     async def process_message(self, text: str, sentiment_mood: str = "neutral",
-                              sentiment_compound: float = 0.0):
+                              sentiment_compound: float = 0.0,
+                              chat_id: int = None) -> dict:
         """Process a user message to extract profile signals.
 
         Call this on every user message. It's lightweight and fast.
+        Returns style_metrics dict for injection into emotion result.
         """
         self._message_count += 1
         now = datetime.now(timezone.utc)
@@ -93,8 +116,22 @@ class ProfileEngine:
                     confidence=min(0.9, 0.4 + self._session_topics[topic] * 0.05),
                 )
 
-        # Extract communication style
-        word_count = len(text.split())
+        # Phase 2: Extract per-message behavioral features
+        metrics = self.extract_style_metrics(text)
+
+        # Log to DB and update baselines
+        await db.log_behavioral_metrics(chat_id=chat_id, **metrics)
+        for key in ("word_count", "formality_score", "caps_ratio",
+                     "pronoun_ratio_i", "engagement_score"):
+            await db.update_behavioral_baseline(key, metrics.get(key, 0.0))
+
+        # Check for notable deviations from baseline
+        deviations = await self._check_deviations(metrics)
+        if deviations:
+            logger.debug(f"[BEHAVIOR] Deviations: {deviations}")
+
+        # Extract communication style (existing logic, uses metrics now)
+        word_count = metrics["word_count"]
         if FORMALITY_MARKERS["formal"].search(text):
             self._session_style["formal"] += 1
         if FORMALITY_MARKERS["casual"].search(text):
@@ -113,6 +150,96 @@ class ProfileEngine:
         # Track frustration triggers
         if sentiment_compound < -0.3:
             await self._track_frustration(text, sentiment_compound)
+
+        return metrics
+
+    @staticmethod
+    def extract_style_metrics(text: str) -> dict:
+        """Extract per-message behavioral style metrics.
+
+        Cheap, rule-based — runs on every user message. Returns a dict
+        that can be logged to behavioral_metrics and injected into
+        the emotion result's style_metrics field.
+        """
+        words = text.split()
+        word_count = len(words)
+        words_lower = [w.lower() for w in words]
+
+        # Sentence metrics
+        sentences = [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+        sentence_count = max(len(sentences), 1)
+        avg_sentence_length = word_count / sentence_count
+
+        # Punctuation counts
+        question_marks = text.count("?")
+        exclamation_marks = text.count("!")
+
+        # Pronoun ratios
+        if word_count > 0:
+            pronoun_i = len(_PRONOUN_I.findall(text)) / word_count
+            pronoun_we = len(_PRONOUN_WE.findall(text)) / word_count
+            pronoun_you = len(_PRONOUN_YOU.findall(text)) / word_count
+        else:
+            pronoun_i = pronoun_we = pronoun_you = 0.0
+
+        # Formality: ratio of function words to total (higher = more formal)
+        if word_count > 0:
+            func_count = sum(1 for w in words_lower if w in _FUNCTION_WORDS)
+            formality_score = func_count / word_count
+        else:
+            formality_score = 0.5
+
+        # Emoji count
+        emoji_count = len(_EMOJI_PATTERN.findall(text))
+
+        # Caps ratio (proportion of uppercase letters, ignoring non-alpha)
+        alpha_chars = [c for c in text if c.isalpha()]
+        if alpha_chars:
+            caps_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+        else:
+            caps_ratio = 0.0
+
+        # Engagement score: composite of question marks, length, follow-up signals
+        engagement = min(1.0, (
+            (0.3 if question_marks > 0 else 0.0) +
+            (0.2 if exclamation_marks > 0 else 0.0) +
+            (0.2 if word_count >= 10 else 0.0) +
+            (0.15 if word_count >= 25 else 0.0) +
+            (0.15 if any(w in words_lower for w in ("why", "how", "what", "tell", "explain", "more")) else 0.0)
+        ))
+
+        return {
+            "word_count": word_count,
+            "sentence_count": sentence_count,
+            "avg_sentence_length": round(avg_sentence_length, 2),
+            "question_marks": question_marks,
+            "exclamation_marks": exclamation_marks,
+            "pronoun_ratio_i": round(pronoun_i, 4),
+            "pronoun_ratio_we": round(pronoun_we, 4),
+            "pronoun_ratio_you": round(pronoun_you, 4),
+            "formality_score": round(formality_score, 4),
+            "emoji_count": emoji_count,
+            "caps_ratio": round(caps_ratio, 4),
+            "engagement_score": round(engagement, 4),
+        }
+
+    async def _check_deviations(self, metrics: dict) -> list[str]:
+        """Flag metrics that deviate >1 std from rolling baseline."""
+        baselines = await db.get_behavioral_baselines()
+        deviations = []
+
+        for key in ("word_count", "formality_score", "caps_ratio",
+                     "pronoun_ratio_i", "engagement_score"):
+            if key not in baselines or baselines[key]["n"] < 10:
+                continue
+            bl = baselines[key]
+            if bl["std"] < 0.001:
+                continue
+            z = abs(metrics.get(key, 0) - bl["mean"]) / bl["std"]
+            if z > 1.0:
+                direction = "high" if metrics.get(key, 0) > bl["mean"] else "low"
+                deviations.append(f"{key}={metrics.get(key, 0):.2f} ({direction}, z={z:.1f})")
+        return deviations
 
     async def _extract_preferences(self, text: str):
         """Extract explicit likes and dislikes from user statements."""

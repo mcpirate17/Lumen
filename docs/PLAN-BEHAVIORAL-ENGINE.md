@@ -137,22 +137,35 @@ Research: LIWC markers explain ~5% of personality variance. Useful directionally
 - [ ] **Offer structure when user shows decision fatigue**: Bullet points, clear options.
 - [ ] **Speed up when user is in a hurry**: Shorter responses, skip niceties.
 
-### 4.2 Never Do These (research says users find them creepy)
-- [ ] DON'T explicitly name detected emotions ("I can see you're anxious")
-- [ ] DON'T reference historical emotional data ("Last Tuesday you were also frustrated")
-- [ ] DON'T use excessive synthetic empathy or mirroring
-- [ ] DON'T do unsolicited mental health check-ins
-- [ ] DON'T make dramatic tone shifts that call attention to the adaptation
+### 4.2 Friend Mode (Tim's preference — 2026-03-24)
+Lumen is a personal companion, not a mass-market product. Act like a friend:
+- [x] **Natural emotional acknowledgment** — "rough day?" / "long one today huh" / "that sucks"
+- [x] **Interest-based callbacks** — "didn't you say you wanted to check out that show?"
+- [x] **Light check-ins** — "you've been quiet today, everything good?" after long gaps
+- [x] **Match energy on wins** — get excited about Eagles wins, commiserate about losses
+- [x] **Play off Tim's humor** — learn his style and riff on it
 
-### 4.3 Tone Adjustment Implementation
+### 4.3 Hard Lines (keep these always)
+- [ ] DON'T use clinical language ("I detect anger at 0.87 confidence")
+- [ ] DON'T play therapist or diagnose mental health
+- [ ] DON'T make it weird — if Tim says "I'm fine" take it at face value
+- [ ] Crisis signals → surface helpline numbers, don't counsel, don't store in profile
+
+### 4.4 Tone Adjustment Implementation
 - [ ] Map detected mood to tone parameters:
-  - `frustrated` → shorter responses, more direct, skip pleasantries
+  - `frustrated` → shorter responses, more direct, maybe acknowledge it naturally
   - `curious` → more detail, offer follow-up suggestions
-  - `happy/excited` → match energy, be enthusiastic
+  - `happy/excited` → match energy, be enthusiastic, celebrate with Tim
   - `neutral` → default personality
-  - `sad` → gentle, don't force positivity, be available
-- [ ] Inject tone guidance into system prompt: "The user seems [mood]. Adjust accordingly: [specific guidance]."
-- [ ] Keep the adjustment subtle — 1-2 words changed in the system prompt, not a personality overhaul
+  - `sad` → be present, don't force positivity, gentle humor if appropriate
+- [ ] Inject tone + context into system prompt (mood + interests + recent patterns)
+- [ ] Adaptations can be visible — a friend doesn't hide that they noticed your mood
+
+### 4.5 Guardrail Override
+- [ ] Passcode-based override for all app-layer guardrails
+- [ ] Qwen3Guard (0.6B) handles actual safety at model level — app rules on top are optional
+- [ ] When passcode entered, disable: output quality gates, enthusiasm limits, formality enforcement
+- [ ] Model-level safety (Qwen3Guard) is NOT overridable — that's the real safety net
 
 ---
 

@@ -117,4 +117,43 @@
     - Max tokens bumped 600→800 to accommodate analytics sections
   - **Deps**: appended `ta>=0.11`, `yfinance>=0.2.40`, `pandas>=2.0` to requirements.txt
   - **NOTE FOR SESSION A**: `generate_storyboard()` signature changed — now takes optional `watchlist: list[dict]` param. Also new `generate_analytics_report(symbols, asset_type)` available for direct "analyze X" queries from router.
+- **2026-03-24 21:45** — Major analytics upgrade + automated scanner:
+  - **analytics.py enriched** with volume indicators (MFI, OBV trend, Chaikin Money Flow), ATR volatility, relative performance vs SPY, and `MarketIntelligence` dataclass (analyst ratings/targets, short interest/trend, insider buy/sell activity, institutional ownership, next earnings date, earnings surprise, payout ratio)
+  - `analyze_stock(symbol, deep=True)` now fetches all the above. `deep=False` (default) does technicals + fundamentals only (faster for scans).
+  - **`agents/finance/scanner.py`** — NEW: automated market scanner
+    - `quick_scan()` — sector ETFs + watchlist + top crypto, runs ~30s, for every-30-min cron
+    - `full_scan()` — entire universe with deep analysis, runs ~5 min, for every-4-hour cron
+    - `watchlist_scan()` — just watchlist, ~15s, every 15 min
+    - `get_dashboard_data()` — returns unseen findings grouped by category for finance tab
+    - `get_proactive_findings()` — top 3 notable findings for Lumen to mention in conversation
+    - `mark_seen()`, `dismiss_finding()` — user interaction with findings
+    - `add_to_universe()` — add symbols to scan
+    - Deduplicates findings (same symbol+category within 2 hours ignored)
+  - **`data/migrations/003_finance_scanner.sql`** — scan_findings, scan_runs, scan_universe tables
+    - Pre-populated with 39 assets: 11 sector ETFs, 4 broad market, 6 bond/treasury, 5 commodities, 3 currencies, 10 crypto
+  - **NOTE FOR SESSION A**: New endpoints needed:
+    - `GET /api/finance/dashboard` → calls `scanner.get_dashboard_data()`
+    - `GET /api/finance/scan/quick` → triggers `scanner.quick_scan()`
+    - `POST /api/finance/findings/{id}/dismiss` → calls `scanner.dismiss_finding()`
+    - Cron setup: `quick_scan()` every 30 min, `full_scan()` every 4 hours (market hours), `watchlist_scan()` every 15 min
+    - `get_proactive_findings()` can feed into the proactive system to mention notable findings during conversation
+- **2026-03-24 22:15** — Macro data + enriched analytics:
+  - **`agents/finance/macro.py`** — NEW: macro economic data
+    - Treasury yields (2Y, 10Y, 30Y) + yield curve spread with inversion detection
+    - Fed funds rate, US Dollar Index with trend detection
+    - VIX (fear index) with signal levels and weekly change
+    - SPY put/call ratio from options chains (contrarian sentiment)
+    - Falls back to yfinance if no FRED API key set
+    - `get_macro_snapshot()`, `macro_to_text()`
+  - **analytics.py enriched** with:
+    - Volume: MFI (volume-weighted RSI), OBV trend (accumulation/distribution), Chaikin Money Flow
+    - Volatility: ATR (absolute + % of price)
+    - Relative performance vs SPY (1-month, 3-month)
+    - `MarketIntelligence`: analyst ratings/targets/count, short interest/ratio/trend, insider buy/sell net, institutional ownership %, next earnings date, earnings surprise, payout ratio, dividend yield
+    - `analyze_stock(symbol, deep=True)` for full intelligence (deep=False for scanner speed)
+  - **storyboard.py** now includes MACRO BACKDROP section + macro data in LLM prompt
+  - **scanner.py** extracts macro findings (yield curve inversion, VIX extremes, put/call extremes)
+  - **config.py**: added `FinanceConfig` (fred_api_key, scan intervals)
+  - **Deps**: appended `fredapi>=0.5`
+  - **FOR SESSION A**: Set `FRED_API_KEY` in env or `finance.fred_api_key` in lumen.yaml for full FRED data. Without it, yields still work via yfinance fallback. VIX and put/call always work (no key needed).
 

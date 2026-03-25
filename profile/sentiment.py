@@ -1,19 +1,29 @@
 """Sentiment analysis layer for Lumen.
 
 Uses Rust lumen_core.analyze_sentiment() for per-message VADER analysis (<1ms).
-Provides higher-level mood tracking, trend detection, and emotional context.
+Now also integrates TinyBERT emotion classification and NRCLex word-level
+emotion via server.emotions for richer mood tracking.
 """
 
+import logging
 import lumen_core
 from datetime import datetime, timezone, timedelta
 from server import database as db
+from server.emotions import analyze_emotion, get_mood_prompt_hint
+
+logger = logging.getLogger("lumen.sentiment")
 
 
 class SentimentTracker:
-    """Tracks sentiment per message and detects mood trends."""
+    """Tracks sentiment per message and detects mood trends.
+
+    Combines VADER (instant, Rust), TinyBERT (6-emotion, ~10-50ms),
+    and NRCLex (word-level Plutchik emotions).
+    """
 
     def __init__(self):
         self._recent_scores: list[float] = []
+        self._recent_emotions: list[str] = []
         self._window_size = 20  # rolling window for trend detection
 
     def analyze(self, text: str) -> lumen_core.SentimentResult:
@@ -24,18 +34,44 @@ class SentimentTracker:
             self._recent_scores.pop(0)
         return result
 
-    async def analyze_and_log(self, text: str, context: str = None) -> lumen_core.SentimentResult:
-        """Analyze and persist mood data point."""
-        result = self.analyze(text)
-        await db.log_mood(
-            compound=result.compound,
-            pos=result.positive,
-            neg=result.negative,
-            neu=result.neutral,
-            mood_label=result.mood,
+    async def analyze_and_log(self, text: str, context: str = None) -> dict:
+        """Analyze with all layers and persist mood data point.
+
+        Returns the full emotion result dict from server.emotions.
+        """
+        # Run full emotion analysis (VADER + TinyBERT + NRCLex)
+        emotion_result = await analyze_emotion(text)
+
+        # Track VADER scores for trend detection
+        self._recent_scores.append(emotion_result["vader_compound"])
+        if len(self._recent_scores) > self._window_size:
+            self._recent_scores.pop(0)
+
+        # Track emotion labels for emotion trend
+        self._recent_emotions.append(emotion_result["emotion"])
+        if len(self._recent_emotions) > self._window_size:
+            self._recent_emotions.pop(0)
+
+        # Persist with the new emotion-aware log function
+        await db.log_mood_with_emotion(
+            compound=emotion_result["vader_compound"],
+            pos=0.0,  # VADER sub-scores not in emotion result; use compound
+            neg=0.0,
+            neu=0.0,
+            mood_label=emotion_result["vader_mood"],
+            emotion_label=emotion_result["emotion"],
+            emotion_confidence=emotion_result["confidence"],
+            nrc_emotions=emotion_result["nrc_emotions"],
             context=context,
         )
-        return result
+
+        logger.debug(
+            f"[MOOD] {emotion_result['emotion']} ({emotion_result['confidence']:.2f}) "
+            f"| vader={emotion_result['vader_compound']:.2f} "
+            f"| adj={emotion_result['mood_adjustment']}"
+        )
+
+        return emotion_result
 
     @property
     def trend(self) -> str:
@@ -89,19 +125,37 @@ class SentimentTracker:
             return 0.0
         return sum(self._recent_scores) / len(self._recent_scores)
 
-    def should_adjust_tone(self) -> dict | None:
-        """Check if the assistant should adjust its tone based on mood.
+    @property
+    def dominant_emotion(self) -> str:
+        """Get the most frequent recent emotion label."""
+        if not self._recent_emotions:
+            return "neutral"
+        from collections import Counter
+        counts = Counter(self._recent_emotions)
+        return counts.most_common(1)[0][0]
 
+    def should_adjust_tone(self) -> dict | None:
+        """Check if the assistant should adjust its tone based on mood + emotion.
+
+        Uses both VADER trend and TinyBERT emotion for richer adjustment.
         Returns adjustment dict or None if no change needed.
         """
         mood = self.current_mood
         trend = self.trend
+        emotion = self.dominant_emotion
 
         if mood == "very_negative" or (mood == "negative" and trend == "declining"):
             return {
                 "action": "be_direct",
-                "reason": f"User mood is {mood}, trend {trend}",
+                "reason": f"User mood is {mood}, trend {trend}, emotion {emotion}",
                 "style": "Keep responses short and direct. No small talk. Be helpful and efficient.",
+            }
+
+        if emotion in ("anger", "fear") and trend in ("declining", "volatile"):
+            return {
+                "action": "be_calm",
+                "reason": f"Detected {emotion} with {trend} trend",
+                "style": "Use a calm, steady tone. Avoid exclamation marks. Be grounding.",
             }
 
         if trend == "volatile":
@@ -111,10 +165,17 @@ class SentimentTracker:
                 "style": "Use a calm, steady tone. Avoid exclamation marks. Be grounding.",
             }
 
-        if mood == "very_positive":
+        if emotion == "sadness" and mood in ("negative", "very_negative"):
+            return {
+                "action": "be_gentle",
+                "reason": f"Detected sadness with {mood} mood",
+                "style": "Be gentle and available. Don't force positivity.",
+            }
+
+        if mood == "very_positive" or emotion in ("joy", "love"):
             return {
                 "action": "match_energy",
-                "reason": f"User mood is {mood}",
+                "reason": f"User mood is {mood}, emotion {emotion}",
                 "style": "Match the user's positive energy. Be enthusiastic but not sycophantic.",
             }
 

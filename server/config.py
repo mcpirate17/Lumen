@@ -44,6 +44,14 @@ class EmotionConfig:
 
 
 @dataclass
+class FinanceConfig:
+    fred_api_key: str = ""
+    scan_quick_interval_min: int = 30
+    scan_full_interval_min: int = 240
+    scan_watchlist_interval_min: int = 15
+
+
+@dataclass
 class ProfileConfig:
     enabled: bool = True
     deep_analysis_interval: str = "daily"
@@ -82,6 +90,7 @@ class LumenConfig:
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     emotion: EmotionConfig = field(default_factory=EmotionConfig)
+    finance: FinanceConfig = field(default_factory=FinanceConfig)
     profile: ProfileConfig = field(default_factory=ProfileConfig)
     guardrails: GuardrailConfig = field(default_factory=GuardrailConfig)
     user: UserConfig = field(default_factory=UserConfig)

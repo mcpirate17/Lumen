@@ -224,6 +224,143 @@ async def get_recent_chat_history(limit: int = 10) -> list[dict]:
         await db.close()
 
 
+async def log_mood_with_emotion(compound: float, pos: float, neg: float,
+                                neu: float, mood_label: str,
+                                emotion_label: str = None,
+                                emotion_confidence: float = None,
+                                nrc_emotions: dict = None,
+                                context: str = None):
+    """Log a mood data point with emotion detection results."""
+    nrc = nrc_emotions or {}
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO mood (vader_compound, vader_pos, vader_neg, vader_neu,
+               mood_label, emotion_label, emotion_confidence,
+               nrc_joy, nrc_anger, nrc_fear, nrc_sadness,
+               nrc_surprise, nrc_trust, nrc_anticipation, nrc_disgust,
+               context)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (compound, pos, neg, neu, mood_label, emotion_label,
+             emotion_confidence,
+             nrc.get("joy", 0.0), nrc.get("anger", 0.0),
+             nrc.get("fear", 0.0), nrc.get("sadness", 0.0),
+             nrc.get("surprise", 0.0), nrc.get("trust", 0.0),
+             nrc.get("anticipation", 0.0), nrc.get("disgust", 0.0),
+             context)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_recent_emotions(hours: int = 4) -> list[dict]:
+    """Get recent emotion readings for trend detection."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            """SELECT emotion_label, emotion_confidence, vader_compound,
+                      mood_label, timestamp
+               FROM mood
+               WHERE timestamp >= datetime('now', ?)
+               AND emotion_label IS NOT NULL
+               ORDER BY timestamp DESC""",
+            (f"-{hours} hours",)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def log_behavioral_metrics(chat_id: int = None, **metrics):
+    """Log per-message behavioral style metrics."""
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO behavioral_metrics
+               (chat_id, word_count, sentence_count, avg_sentence_length,
+                question_marks, exclamation_marks,
+                pronoun_ratio_i, pronoun_ratio_we, pronoun_ratio_you,
+                formality_score, emoji_count, caps_ratio, engagement_score)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (chat_id,
+             metrics.get("word_count", 0),
+             metrics.get("sentence_count", 0),
+             metrics.get("avg_sentence_length", 0.0),
+             metrics.get("question_marks", 0),
+             metrics.get("exclamation_marks", 0),
+             metrics.get("pronoun_ratio_i", 0.0),
+             metrics.get("pronoun_ratio_we", 0.0),
+             metrics.get("pronoun_ratio_you", 0.0),
+             metrics.get("formality_score", 0.5),
+             metrics.get("emoji_count", 0),
+             metrics.get("caps_ratio", 0.0),
+             metrics.get("engagement_score", 0.5))
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_behavioral_baseline(metric_name: str, new_value: float):
+    """Update rolling baseline for a behavioral metric using Welford's algorithm."""
+    db = await get_db()
+    try:
+        async with db.execute(
+            "SELECT rolling_mean, rolling_std, sample_count FROM behavioral_baselines WHERE metric_name = ?",
+            (metric_name,)
+        ) as cur:
+            row = await cur.fetchone()
+
+        if row:
+            n = row["sample_count"] + 1
+            old_mean = row["rolling_mean"]
+            # Welford's online algorithm for mean and variance
+            delta = new_value - old_mean
+            new_mean = old_mean + delta / n
+            delta2 = new_value - new_mean
+            # Running M2 approximation via std
+            old_var = row["rolling_std"] ** 2 * (n - 1) if n > 1 else 0
+            new_var = (old_var + delta * delta2) / n if n > 0 else 0
+            new_std = new_var ** 0.5
+
+            await db.execute(
+                """UPDATE behavioral_baselines
+                   SET rolling_mean = ?, rolling_std = ?, sample_count = ?,
+                       last_updated = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   WHERE metric_name = ?""",
+                (new_mean, new_std, n, metric_name)
+            )
+        else:
+            await db.execute(
+                """INSERT INTO behavioral_baselines (metric_name, rolling_mean, rolling_std, sample_count)
+                   VALUES (?, ?, 0.0, 1)""",
+                (metric_name, new_value)
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_behavioral_baselines() -> dict[str, dict]:
+    """Get all behavioral baselines for drift detection."""
+    db = await get_db()
+    try:
+        async with db.execute("SELECT * FROM behavioral_baselines") as cur:
+            rows = await cur.fetchall()
+            return {
+                r["metric_name"]: {
+                    "mean": r["rolling_mean"],
+                    "std": r["rolling_std"],
+                    "n": r["sample_count"],
+                }
+                for r in rows
+            }
+    finally:
+        await db.close()
+
+
 async def log_prediction(prediction: str, confidence: float,
                          basis: str, action: str):
     """Log a prediction for feedback tracking."""
