@@ -13,28 +13,63 @@ import logging
 log = logging.getLogger("lumen.context")
 
 
+def _split_sections(text: str) -> dict[str, str]:
+    """Split text into named sections delimited by '--- TITLE ---' or '--- TITLE (source) ---' headers.
+    Only lines matching '--- WORD(S) ---' pattern are section headers.
+    Lines that are just '----...' separators within tables are NOT headers."""
+    sections = {}
+    current_name = ""
+    current_lines = []
+
+    for line in text.split('\n'):
+        stripped = line.strip()
+        # A section header has words between the dashes: "--- TOP CRYPTO (CoinGecko) ---"
+        # A table separator is just dashes: "------..." or "--- " with no closing "---"
+        # Section header: starts with "--- " and contains letters (not just dashes)
+        is_header = (
+            stripped.startswith('--- ')
+            and any(c.isalpha() for c in stripped)
+            and stripped.endswith('---')
+        )
+        if is_header:
+            if current_name:
+                sections[current_name] = '\n'.join(current_lines).strip()
+            current_name = stripped.strip('-').strip().upper()
+            current_lines = [line]
+        else:
+            current_lines.append(line)
+
+    if current_name:
+        sections[current_name] = '\n'.join(current_lines).strip()
+
+    return sections
+
+
 def filter_finance_context(query: str, full_text: str) -> str:
     """Filter finance data to what's relevant to the query."""
     query_lower = query.lower()
-    sections = []
+    sections = _split_sections(full_text)
+    result_parts = []
 
     # Always include Fear & Greed (short, always relevant)
-    fg_match = re.search(r'--- FEAR & GREED.*?(?=---|$)', full_text, re.DOTALL)
-    if fg_match:
-        sections.append(fg_match.group().strip())
+    for key, content in sections.items():
+        if 'FEAR' in key and 'GREED' in key:
+            # Keep just current + trend (first 3 content lines)
+            lines = content.split('\n')
+            result_parts.append('\n'.join(lines[:5]))
+            break
 
-    # Check if asking about specific crypto
+    # Check if asking about crypto
     crypto_keywords = re.findall(
         r'\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|doge|ada|bnb|crypto|coin)\b',
         query_lower
     )
-    if crypto_keywords or 'crypto' in query_lower or 'coin' in query_lower:
-        # Include crypto section but only top 10
-        crypto_match = re.search(r'--- TOP CRYPTO.*?(?=---|$)', full_text, re.DOTALL)
-        if crypto_match:
-            lines = crypto_match.group().strip().split('\n')
-            # Header + separator + top 10 coins
-            sections.append('\n'.join(lines[:13]))
+    if crypto_keywords or 'crypto' in query_lower:
+        for key, content in sections.items():
+            if 'CRYPTO' in key:
+                lines = content.split('\n')
+                result_parts.append('\n'.join(lines[:13]))  # header + top 10
+                break
 
     # Check if asking about stocks
     stock_keywords = re.findall(
@@ -42,46 +77,50 @@ def filter_finance_context(query: str, full_text: str) -> str:
         query_lower
     )
     if stock_keywords:
-        for label in ['TOP GAINERS', 'TOP LOSERS', 'MOST ACTIVE', 'TRENDING']:
-            match = re.search(rf'--- {label}.*?(?=---|$)', full_text, re.DOTALL)
-            if match:
-                lines = match.group().strip().split('\n')
-                sections.append('\n'.join(lines[:8]))  # header + top 5
+        for key, content in sections.items():
+            if any(k in key for k in ['GAINERS', 'LOSERS', 'ACTIVE', 'TRENDING']):
+                lines = content.split('\n')
+                result_parts.append('\n'.join(lines[:8]))
 
-    # Include signals section (always short and useful)
-    sig_match = re.search(r'--- SIGNALS.*?(?=---|$)', full_text, re.DOTALL)
-    if sig_match and sig_match.group().strip():
-        sections.append(sig_match.group().strip())
+    # Include signals (always short)
+    for key, content in sections.items():
+        if 'SIGNAL' in key and content.strip():
+            result_parts.append(content)
+            break
 
-    # If no specific filter matched, give a compact overview
-    if not sections or (not crypto_keywords and not stock_keywords):
+    # If nothing specific matched, return compact overview
+    if len(result_parts) <= 1:  # only Fear & Greed
         return _compact_finance_overview(full_text)
 
-    return '\n\n'.join(sections)
+    return '\n\n'.join(result_parts)
 
 
 def _compact_finance_overview(full_text: str) -> str:
     """Create a compact overview when query is general ('how are markets?')."""
+    sections = _split_sections(full_text)
     lines = []
 
-    # Top 5 crypto only
-    crypto_match = re.search(r'--- TOP CRYPTO.*?(?=---|$)', full_text, re.DOTALL)
-    if crypto_match:
-        crypto_lines = crypto_match.group().strip().split('\n')
-        lines.extend(crypto_lines[:8])  # header + 5 coins
-        lines.append('')
+    # Top 5 crypto
+    for key, content in sections.items():
+        if 'CRYPTO' in key:
+            crypto_lines = content.split('\n')
+            lines.extend(crypto_lines[:8])
+            lines.append('')
+            break
 
     # Fear & Greed
-    fg_match = re.search(r'--- FEAR & GREED.*?(?=---|$)', full_text, re.DOTALL)
-    if fg_match:
-        fg_lines = fg_match.group().strip().split('\n')
-        lines.extend(fg_lines[:4])  # current + trend only
-        lines.append('')
+    for key, content in sections.items():
+        if 'FEAR' in key:
+            fg_lines = content.split('\n')
+            lines.extend(fg_lines[:4])
+            lines.append('')
+            break
 
-    # Signals only
-    sig_match = re.search(r'--- SIGNALS.*?(?=---|$)', full_text, re.DOTALL)
-    if sig_match:
-        lines.append(sig_match.group().strip())
+    # Signals
+    for key, content in sections.items():
+        if 'SIGNAL' in key and content.strip():
+            lines.append(content)
+            break
 
     return '\n'.join(lines) if lines else full_text[:800]
 

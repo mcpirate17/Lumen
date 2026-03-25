@@ -204,7 +204,12 @@ async def chat_stream(request: Request):
         model_name = model_map.get(classification.route, config.ollama.model_analysis)
         tier = classification.route
         system = SYSTEM_PROMPTS.get(classification.domain, SYSTEM_PROMPTS["general"])
-        temp, top_p, max_tok, _, think = MODEL_PARAMS.get(tier, (0.7, 0.8, 400, 30, False))
+        temp, top_p, max_tok, _ = MODEL_PARAMS.get(tier, (0.7, 0.8, 400, 30))
+        # Thinking mode only for complex tasks on 4B+ models
+        from server.router import THINKING_REASONS
+        think = (classification.reason in THINKING_REASONS and tier in ("qwen:4b", "qwen:9b"))
+        if think:
+            temp, top_p = 0.6, 0.95
         trace.model_selected = f"{tier} → {model_name}"
         trace.system_prompt = system
 

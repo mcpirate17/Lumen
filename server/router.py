@@ -57,16 +57,26 @@ SYSTEM_PROMPTS = {
     ),
 }
 
-# Model config: (temperature, top_p, max_tokens, timeout_seconds, think)
+# Model config: (temperature, top_p, max_tokens, timeout_seconds)
 # Qwen3.5 official recommendations:
 #   Non-thinking: temp=0.7, top_p=0.8, top_k=20
-#   Thinking (precise): temp=0.6, top_p=0.95, top_k=20
+#   Thinking: temp=0.6, top_p=0.95, top_k=20
 #   Never use greedy decoding (temp=0) with thinking mode — causes loops
+#
+# Thinking mode is NOT set per-tier — it's set per-query based on complexity.
+# Simple extraction ("bitcoin price?") = no thinking.
+# Analysis ("compare BTC vs ETH trends") = thinking on 4B/9B.
 MODEL_PARAMS = {
-    "qwen:2b":  (0.7, 0.8,  200,  10, False),  # fast tier, non-thinking always
-    "qwen:4b":  (0.6, 0.95, 400,  30, True),   # thinking mode for domain queries
-    "qwen:9b":  (0.6, 0.95, 600,  45, True),   # thinking mode for complex
-    "claude":   (0.7, 1.0,  1024, 120, False),
+    "qwen:2b":  (0.7, 0.8,  200,  10),
+    "qwen:4b":  (0.7, 0.8,  400,  30),
+    "qwen:9b":  (0.7, 0.8,  600,  45),
+    "claude":   (0.7, 1.0,  1024, 120),
+}
+
+# Reasons that benefit from thinking mode (4B+ only)
+THINKING_REASONS = {
+    "complex_reasoning", "opinion_request", "financial_advice",
+    "code_task", "deep_explanation",
 }
 
 
@@ -237,14 +247,16 @@ class Router:
                 trace.errors.append(f"claude_error: {e}")
                 response = await self._local_generate(
                     augmented_message, self.config.ollama.model_analysis,
-                    system, "qwen:9b", trace, history
+                    system, "qwen:9b", trace, history,
+                    reason=classification.reason,
                 )
                 actual_model = "qwen:9b"
                 escalated = False
         else:
             # Local model path
             response = await self._local_generate(
-                augmented_message, model_name, system, classification.route, trace, history
+                augmented_message, model_name, system, classification.route, trace, history,
+                reason=classification.reason,
             )
             actual_model = classification.route
 
@@ -382,12 +394,17 @@ class Router:
         self, prompt: str, model: str, system: str, tier: str,
         trace: RequestTrace | None = None,
         history: list[dict] | None = None,
+        reason: str = "",
     ) -> str:
         """Generate via Ollama with tier-appropriate params."""
-        temp, top_p, max_tok, _, think = MODEL_PARAMS.get(tier, (0.7, 0.8, 400, 30, False))
+        temp, top_p, max_tok, _ = MODEL_PARAMS.get(tier, (0.7, 0.8, 400, 30))
+        # Thinking mode only for complex tasks on 4B+ models
+        think = (reason in THINKING_REASONS and tier in ("qwen:4b", "qwen:9b"))
+        if think:
+            temp, top_p = 0.6, 0.95  # Qwen3.5 thinking-mode sampling
         log.info(
-            "[GENERATE] local model=%s tier=%s temp=%.1f top_p=%.2f max_tokens=%d think=%s history=%d",
-            model, tier, temp, top_p, max_tok, think, len(history) if history else 0,
+            "[GENERATE] local model=%s tier=%s temp=%.1f top_p=%.2f max_tokens=%d think=%s reason=%s history=%d",
+            model, tier, temp, top_p, max_tok, think, reason, len(history) if history else 0,
         )
 
         result = await self.ollama.generate(
