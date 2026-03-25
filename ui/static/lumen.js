@@ -825,6 +825,31 @@ function isEcho(transcript) {
   return false;
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// SEMANTIC ENDPOINTING (client-side heuristic)
+// Quick check if an utterance is complete before sending to the server.
+// Catches obvious incomplete phrases without a server round-trip.
+// Server endpoint /api/voice/complete available for model-based checks.
+// ══════════════════════════════════════════════════════════════════════════════
+const TRAILING_INCOMPLETE = new Set([
+  'the', 'a', 'an', 'of', 'for', 'to', 'in', 'on', 'at', 'and', 'or', 'but',
+  'with', 'about', 'from', 'is', 'are', 'was', 'were', 'that', 'which', 'who',
+  'how', 'what', 'when', 'where', 'why', 'if', 'my', 'your', 'their', 'its',
+]);
+
+function isUtteranceComplete(text) {
+  const trimmed = text.trim();
+  if (trimmed.length < 3) return false;
+  // Ends with punctuation → complete
+  if (/[.!?]$/.test(trimmed)) return true;
+  const words = trimmed.toLowerCase().split(/\s+/);
+  if (words.length <= 1) return false;
+  // Trailing function word → probably incomplete
+  if (TRAILING_INCOMPLETE.has(words[words.length - 1])) return false;
+  // 3+ words without trailing function word → likely complete
+  return words.length >= 3;
+}
+
 function shouldAutoListen() {
   const timeSinceSpeech = Date.now() - lastSpeechEndTime;
   if (timeSinceSpeech < SPEECH_COOLDOWN_MS) return false;

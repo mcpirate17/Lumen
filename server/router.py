@@ -101,6 +101,12 @@ class Router:
         self.config = config
         self.ollama = ollama
         self.claude = claude
+        self._guardrails_overridden = False
+
+    def set_guardrail_override(self, active: bool):
+        """Toggle app-layer guardrail override. Qwen3Guard (model-level) stays active."""
+        self._guardrails_overridden = active
+        log.info("[GUARDRAIL] Override %s", "ACTIVE" if active else "INACTIVE")
 
     async def process(self, user_message: str) -> RouterResponse:
         """Full pipeline: classify → ack → route → guardrail → respond."""
@@ -282,6 +288,8 @@ class Router:
         trace.model_actual = actual_model
 
         # Step 8: Guardrails check (Rust, <1ms)
+        # When override is active, skip app-layer quality gates.
+        # Qwen3Guard at model level is NOT affected by override.
         t0 = time.monotonic()
         guardrail = lumen_core.check_output(
             response, classification.domain,
@@ -290,54 +298,80 @@ class Router:
         )
         guard_ms = (time.monotonic() - t0) * 1000
 
-        trace.guardrail_safe = guardrail.safe
+        if self._guardrails_overridden:
+            guardrail_safe = True  # bypass app-layer check
+            log.info("[GUARDRAIL] OVERRIDDEN — skipping app-layer checks (%.1fms)", guard_ms)
+        else:
+            guardrail_safe = guardrail.safe
+
+        trace.guardrail_safe = guardrail_safe
         trace.guardrail_reason = guardrail.reason
         trace.guardrail_quality = guardrail.quality_score
         trace.guardrail_needs_disclaimer = guardrail.needs_disclaimer
         needs_disclaimer = guardrail.needs_disclaimer
 
         log.info(
-            "[GUARDRAIL] safe=%s reason=%s quality=%.2f disclaimer=%s (%.1fms)",
-            guardrail.safe, guardrail.reason, guardrail.quality_score,
+            "[GUARDRAIL] safe=%s reason=%s quality=%.2f disclaimer=%s (%.1fms)%s",
+            guardrail_safe, guardrail.reason, guardrail.quality_score,
             guardrail.needs_disclaimer, guard_ms,
+            " [OVERRIDE]" if self._guardrails_overridden else "",
         )
 
-        if not guardrail.safe and actual_model != "claude":
+        if not guardrail_safe and actual_model != "claude":
             log.warning(
-                "[GUARDRAIL] FAILED — response blocked (reason: %s). Attempting escalation.",
+                "[GUARDRAIL] FAILED — response blocked (reason: %s). Self-repairing.",
                 guardrail.reason,
             )
             trace.escalation_reason = f"guardrail:{guardrail.reason}"
 
+            # Self-repair: try again with a bigger model, prepend repair phrase
+            repair_prefix = "Actually, let me double-check that. "
+
             if await self.claude.is_available():
                 try:
-                    response = await self.claude.generate(
-                        prompt=user_message,
+                    repaired = await self.claude.generate(
+                        prompt=augmented_message,
                         system=system,
                         reason=f"guardrail_escalation:{guardrail.reason}",
                     )
+                    response = repair_prefix + repaired
                     actual_model = "claude"
                     escalated = True
                     trace.was_escalated = True
                     trace.model_actual = "claude"
                     trace.response_text = response
                     guardrail = lumen_core.check_output(
-                        response, classification.domain,
+                        repaired, classification.domain,
                         self.config.guardrails.min_words,
                         self.config.guardrails.min_chars,
                     )
                     trace.guardrail_safe = guardrail.safe
-                    log.info("[GUARDRAIL] re-checked Claude response: safe=%s", guardrail.safe)
+                    log.info("[SELF-REPAIR] re-generated via Claude: safe=%s", guardrail.safe)
                 except Exception as e:
-                    response = "I'm having trouble generating a good response right now. Can you rephrase?"
+                    response = "I'm having trouble with that one. Can you rephrase?"
                     trace.errors.append(f"escalation_error: {e}")
             else:
-                response = "I'm not confident in my answer. Could you rephrase, or try a simpler question?"
-                log.warning("[GUARDRAIL] Claude unavailable — returning fallback")
+                # No Claude — try the next tier up locally
+                try:
+                    repaired = await self._local_generate(
+                        augmented_message, self.config.ollama.model_analysis,
+                        system, "qwen:9b", trace, history,
+                        reason=classification.reason,
+                    )
+                    if repaired and len(repaired.strip()) > 10:
+                        response = repair_prefix + repaired
+                        actual_model = "qwen:9b"
+                        log.info("[SELF-REPAIR] re-generated via 9B")
+                    else:
+                        response = "I'm not confident in my answer on that one. Could you try rephrasing?"
+                except Exception:
+                    response = "I'm not confident in my answer on that one. Could you try rephrasing?"
+                    log.warning("[SELF-REPAIR] local fallback also failed")
 
-        # Step 9: Self-certainty check for factual claims
+        # Step 9: Self-certainty check for factual claims (skipped when override active)
         if (
             self.config.guardrails.self_certainty_check
+            and not self._guardrails_overridden
             and actual_model in ("qwen:4b", "qwen:9b")
             and classification.domain in ("finance", "sports", "news")
         ):
@@ -351,18 +385,27 @@ class Router:
                 trace.self_check_passed = is_certain
                 log.info("[SELF-CHECK] certain=%s (%.0fms)", is_certain, check_ms)
 
-                if not is_certain and await self.claude.is_available():
-                    response = await self.claude.generate(
-                        prompt=user_message,
-                        system=system,
-                        reason="self_certainty_fail",
-                    )
-                    actual_model = "claude"
-                    escalated = True
-                    trace.was_escalated = True
-                    trace.model_actual = "claude"
-                    trace.response_text = response
-                    trace.escalation_reason = "self_certainty_fail"
+                if not is_certain:
+                    # Self-repair: model isn't confident, try to get a better answer
+                    if await self.claude.is_available():
+                        try:
+                            repaired = await self.claude.generate(
+                                prompt=augmented_message,
+                                system=system,
+                                reason="self_certainty_fail",
+                            )
+                            response = "Hmm, let me re-check. " + repaired
+                            actual_model = "claude"
+                            escalated = True
+                            trace.was_escalated = True
+                            trace.model_actual = "claude"
+                            trace.response_text = response
+                            trace.escalation_reason = "self_certainty_fail"
+                        except Exception:
+                            pass  # keep original response if Claude fails
+                    else:
+                        # No Claude — just flag uncertainty in the response
+                        response = "I'm not 100% sure on this, but — " + response
             except Exception as e:
                 log.warning("[SELF-CHECK] failed: %s (non-fatal)", e)
                 trace.errors.append(f"self_check_error: {e}")

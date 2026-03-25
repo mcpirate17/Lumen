@@ -35,6 +35,15 @@ class TTSConfig:
 
 
 @dataclass
+class EmotionConfig:
+    enabled: bool = True
+    tinybert_model: str = "AdamCodd/tinybert-emotion-balanced"
+    nrclex_enabled: bool = True
+    min_confidence: float = 0.5  # below this, fall back to VADER mood
+    warmup_on_start: bool = True
+
+
+@dataclass
 class ProfileConfig:
     enabled: bool = True
     deep_analysis_interval: str = "daily"
@@ -48,6 +57,7 @@ class GuardrailConfig:
     min_words: int = 4
     min_chars: int = 20
     self_certainty_check: bool = True
+    override_passcode: str = ""  # set in lumen.yaml to bypass app-layer guardrails
 
 
 @dataclass
@@ -71,6 +81,7 @@ class LumenConfig:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    emotion: EmotionConfig = field(default_factory=EmotionConfig)
     profile: ProfileConfig = field(default_factory=ProfileConfig)
     guardrails: GuardrailConfig = field(default_factory=GuardrailConfig)
     user: UserConfig = field(default_factory=UserConfig)

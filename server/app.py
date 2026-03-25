@@ -623,6 +623,89 @@ async def cache_status():
     return cache.get_status()
 
 
+# --- Semantic Endpointing ---
+
+
+@app.post("/api/voice/complete")
+async def check_utterance_complete(request: Request):
+    """Check if a partial utterance is semantically complete.
+
+    Used by the voice UI to decide if the user is done speaking.
+    Instead of fixed silence threshold, analyze the content.
+    "The price of..." → incomplete. "What time is the game" → complete.
+
+    Returns within ~100-200ms using the 0.8B model.
+    """
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text or len(text) < 3:
+        return {"complete": False, "reason": "too_short"}
+
+    # Quick heuristics first (no model needed)
+    # Ends with sentence-ending punctuation → complete
+    if text[-1] in '.!?':
+        return {"complete": True, "reason": "punctuation"}
+
+    # Very short fragments are likely incomplete
+    words = text.split()
+    if len(words) <= 2:
+        return {"complete": False, "reason": "too_few_words"}
+
+    # Trailing prepositions/articles/conjunctions → incomplete
+    trailing_incomplete = {'the', 'a', 'an', 'of', 'for', 'to', 'in', 'on', 'at',
+                           'and', 'or', 'but', 'with', 'about', 'from', 'is', 'are',
+                           'was', 'were', 'that', 'which', 'who', 'how', 'what', 'when',
+                           'where', 'why', 'if', 'my', 'your', 'their', 'its'}
+    if words[-1].lower() in trailing_incomplete:
+        return {"complete": False, "reason": "trailing_function_word"}
+
+    # Model-based check for ambiguous cases
+    try:
+        result = await ollama.generate(
+            prompt=f'Is this a complete thought or sentence? "{text}"\nReply with only: yes or no',
+            model=config.ollama.model_fast,
+            temperature=0.0,
+            max_tokens=5,
+        )
+        is_complete = "yes" in result.lower()
+        return {"complete": is_complete, "reason": "model_check"}
+    except Exception:
+        # On failure, assume complete (don't block the user)
+        return {"complete": True, "reason": "fallback"}
+
+
+# --- Guardrail Override ---
+
+
+@app.post("/api/guardrails/override")
+async def guardrail_override(request: Request):
+    """Toggle app-layer guardrail override with passcode.
+    Qwen3Guard (model-level safety) is NOT affected — it always runs."""
+    body = await request.json()
+    passcode = body.get("passcode", "")
+    expected = config.guardrails.override_passcode
+
+    if not expected:
+        return JSONResponse({"error": "No override passcode configured"}, status_code=403)
+
+    if passcode == expected:
+        active = body.get("active", True)
+        router.set_guardrail_override(active)
+        return {"override": active, "note": "Qwen3Guard model-level safety is still active"}
+    else:
+        return JSONResponse({"error": "Invalid passcode"}, status_code=403)
+
+
+@app.get("/api/guardrails/status")
+async def guardrail_status():
+    """Check current guardrail override status."""
+    return {
+        "override_active": router._guardrails_overridden,
+        "app_guardrails": "bypassed" if router._guardrails_overridden else "active",
+        "model_guardrails": "always active (Qwen3Guard)",
+    }
+
+
 # --- Proactive Intelligence ---
 
 
